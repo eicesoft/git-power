@@ -74,8 +74,12 @@ import {
   GetChangeDiff,
   GetCommitDetail,
   IgnoreChange,
+  ListDashboardRepositories,
+  ListRecentProjects,
   OpenChange,
   Pull,
+  Push,
+  RecordProject,
   RefreshRepository,
   GitAction,
   SelectRepository,
@@ -95,6 +99,7 @@ type CommitDetailItem = Awaited<ReturnType<typeof GetCommitDetail>>
 type CommitFileItem = CommitDetailItem['files'][number]
 type Change = Repository['changes'][number]
 type GitCommandLogItem = Awaited<ReturnType<typeof GetGitCommandLogs>>[number]
+type ProjectInfoItem = Awaited<ReturnType<typeof ListRecentProjects>>[number]
 
 type ChangeListItem =
   | { type: 'directory'; directory: string }
@@ -285,6 +290,14 @@ function App() {
   const [pullBranch, setPullBranch] = useState('')
   const [pullRebase, setPullRebase] = useState(false)
   const [pullStash, setPullStash] = useState(true)
+  const [pushOpen, setPushOpen] = useState(false)
+  const [pushBranch, setPushBranch] = useState('')
+  const [pushTarget, setPushTarget] = useState('')
+  const [pushTracking, setPushTracking] = useState(true)
+  const [pushTags, setPushTags] = useState(false)
+  const [pushForce, setPushForce] = useState(false)
+  const [recentProjects, setRecentProjects] = useState<ProjectInfoItem[]>([])
+  const [storedProjects, setStoredProjects] = useState<ProjectInfoItem[]>([])
 
   const activeRepository = useMemo(
     () => repositories.find((repository) => repository.path === activePath) ?? null,
@@ -318,6 +331,19 @@ function App() {
     refreshGitCommandLogs()
   }, [])
 
+  const refreshStoredProjects = () => {
+    ListRecentProjects()
+      .then(setRecentProjects)
+      .catch(() => {})
+    ListDashboardRepositories()
+      .then(setStoredProjects)
+      .catch(() => {})
+  }
+
+  useEffect(() => {
+    refreshStoredProjects()
+  }, [])
+
   const updateRepository = (repository: Repository) => {
     if (!repository.path) return
     setRepositories((current) => {
@@ -327,6 +353,14 @@ function App() {
         : [...current, repository]
     })
     setActivePath(repository.path)
+    RecordProject(repository.path, repository.name)
+      .then(refreshStoredProjects)
+      .catch(() => {})
+  }
+
+  const openStoredProject = (path: string) => {
+    if (busy) return
+    runAction(() => RefreshRepository(path))
   }
 
   const runAction = async (action: () => Promise<Repository>) => {
@@ -403,6 +437,40 @@ function App() {
     runAction(async () => {
       const repository = await Pull(path, pullRemote, pullBranch, pullRebase, pullStash)
       setPullOpen(false)
+      return repository
+    })
+  }
+
+  const openPushDialog = () => {
+    if (!activeRepository || busy) return
+    if (activeRepository.remotes.length === 0) {
+      toastError('当前仓库没有配置远程仓库，无法 Push', '无法 Push')
+      return
+    }
+    const remote = activeRepository.remotes.includes('origin') ? 'origin' : activeRepository.remotes[0]
+    const current = activeRepository.branches.find((branch) => branch.current && !branch.remote)
+    const branch = current?.name ?? ''
+    let target = `${remote}/${branch}`
+    if (current?.upstream?.startsWith(`${remote}/`)) {
+      target = current.upstream
+    }
+    setPushBranch(branch)
+    setPushTarget(target)
+    setPushTracking(true)
+    setPushTags(false)
+    setPushForce(false)
+    setPushOpen(true)
+  }
+
+  const pushToRemote = () => {
+    if (!activePath || busy || !pushBranch || !pushTarget) return
+    const remote = activeRepository?.remotes.find((candidate) => pushTarget.startsWith(`${candidate}/`))
+    if (!remote) return
+    const target = pushTarget.slice(remote.length + 1)
+    const path = activePath
+    runAction(async () => {
+      const repository = await Push(path, remote, pushBranch, target, pushTracking, pushTags, pushForce)
+      setPushOpen(false)
       return repository
     })
   }
@@ -486,6 +554,9 @@ function App() {
   const pullRemoteBranches = (activeRepository?.branches ?? [])
     .filter((branch) => branch.remote && branch.name.startsWith(`${pullRemote}/`))
     .map((branch) => branch.name.slice(pullRemote.length + 1))
+  const pushRemoteBranches = activeRepository?.branches.filter((branch) => branch.remote).map((branch) => branch.name) ?? []
+  const pushTargetExists = pushRemoteBranches.includes(pushTarget)
+  const pushTargetOptions = pushTargetExists ? pushRemoteBranches : [pushTarget, ...pushRemoteBranches]
   const aheadCommits = activeRepository?.aheadCommits ?? 0
   const currentBranchHasUpstream = localBranches.some(
     (branch) => branch.current && branch.upstream,
@@ -656,7 +727,13 @@ function App() {
       </header>
 
       {!activeRepository ? (
-        <OpenRepositoryPage busy={busy} onOpen={openRepository} />
+        <Dashboard
+          busy={busy}
+          recentProjects={recentProjects}
+          projects={storedProjects}
+          onOpen={openRepository}
+          onOpenProject={openStoredProject}
+        />
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1">
@@ -765,7 +842,12 @@ function App() {
                     className={`h-11 ${
                       item.action === 'push' && currentBranchHasUpstream ? 'w-16' : 'w-10'
                     } flex-col gap-0.5 rounded-md px-1 text-[10px] text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent`}
-                    onClick={() => (item.action === 'pull' ? openPullDialog() : runGitAction(item.action))}
+                    onClick={() =>
+                      item.action === 'pull'
+                        ? openPullDialog()
+                        : item.action === 'push'
+                          ? openPushDialog()
+                          : runGitAction(item.action)}
                     disabled={busy}
                     title={
                       item.action === 'push' && currentBranchHasUpstream
@@ -1264,6 +1346,7 @@ function App() {
       )}
 
       {activeRepository && (
+        <>
         <Dialog open={pullOpen} onOpenChange={setPullOpen}>
           <DialogContent className="sm:max-w-md" showCloseButton={false}>
             <DialogHeader>
@@ -1346,6 +1429,93 @@ function App() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <Dialog open={pushOpen} onOpenChange={setPushOpen}>
+          <DialogContent className="sm:max-w-md" showCloseButton={false}>
+            <DialogHeader>
+              <DialogTitle>Push</DialogTitle>
+              <DialogDescription>Push your local changes to remote repository</DialogDescription>
+            </DialogHeader>
+            <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2.5">
+              <span className="text-right text-sm text-muted-foreground">Branch:</span>
+              <Select
+                value={pushBranch}
+                items={localBranches.map((branch) => ({ value: branch.name, label: branch.name }))}
+                onValueChange={(value) => {
+                  const branch = String(value)
+                  setPushBranch(branch)
+                  const remote = activeRepository.remotes.find((candidate) =>
+                    pushTarget.startsWith(`${candidate}/`),
+                  )
+                  if (remote) setPushTarget(`${remote}/${branch}`)
+                }}
+              >
+                <SelectTrigger className="w-48">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {localBranches.map((branch) => (
+                    <SelectItem key={branch.name} value={branch.name}>
+                      {branch.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <span className="text-right text-sm text-muted-foreground">To:</span>
+              <Select
+                value={pushTarget}
+                items={pushTargetOptions.map((option) => ({
+                  value: option,
+                  label: pushRemoteBranches.includes(option) ? option : `new (${option})`,
+                }))}
+                onValueChange={(value) => setPushTarget(String(value))}
+              >
+                <SelectTrigger className="w-48">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {pushTargetOptions.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {pushRemoteBranches.includes(option) ? option : `new (${option})`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div className="col-start-2 flex flex-col gap-2.5">
+                <label className="flex cursor-pointer items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={pushTracking}
+                    onCheckedChange={(checked) => setPushTracking(checked === true)}
+                  />
+                  Create tracking reference
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={pushTags}
+                    onCheckedChange={(checked) => setPushTags(checked === true)}
+                  />
+                  Push all tags
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={pushForce}
+                    onCheckedChange={(checked) => setPushForce(checked === true)}
+                  />
+                  Force push
+                </label>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPushOpen(false)} disabled={busy}>
+                Cancel
+              </Button>
+              <Button onClick={pushToRemote} disabled={busy || !pushBranch || !pushTarget}>
+                Push
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        </>
       )}
 
       <AlertDialog
@@ -1373,18 +1543,160 @@ function App() {
   )
 }
 
-function OpenRepositoryPage({ busy, onOpen }: { busy: boolean; onOpen: () => void }) {
+type DashboardTreeNode = {
+  name: string
+  path: string
+  project: ProjectInfoItem | null
+  children: DashboardTreeNode[]
+}
+
+// buildDashboardTree 按路径分段把仓库组织成目录树，路径分隔符兼容 / 与 \。
+function buildDashboardTree(projects: ProjectInfoItem[]): DashboardTreeNode[] {
+  const root: DashboardTreeNode = { name: '', path: '', project: null, children: [] }
+  for (const project of projects) {
+    const segments = project.path.split(/[\\/]/).filter(Boolean)
+    let parent = root
+    segments.forEach((segment, index) => {
+      const path = segments.slice(0, index + 1).join('/')
+      let node = parent.children.find((item) => item.path === path)
+      if (!node) {
+        node = { name: segment, path, project: null, children: [] }
+        parent.children.push(node)
+      }
+      if (index === segments.length - 1) node.project = project
+      parent = node
+    })
+  }
+  return root.children
+}
+
+function Dashboard({
+  busy,
+  recentProjects,
+  projects,
+  onOpen,
+  onOpenProject,
+}: {
+  busy: boolean
+  recentProjects: ProjectInfoItem[]
+  projects: ProjectInfoItem[]
+  onOpen: () => void
+  onOpenProject: (path: string) => void
+}) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
+  const tree = useMemo(() => buildDashboardTree(projects), [projects])
+
+  const toggle = (path: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+
+  const renderNodes = (nodes: DashboardTreeNode[], depth: number): ReactNode[] =>
+    nodes.map((node) => {
+      const indent = { paddingLeft: depth * 12 + 8 }
+      if (node.project && node.children.length === 0) {
+        return (
+          <button
+            key={node.path}
+            type="button"
+            disabled={busy}
+            onClick={() => onOpenProject(node.project!.path)}
+            className="flex w-full items-center gap-2 rounded-md py-1.5 pr-2 text-left text-sm text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+            style={indent}
+            title={node.project.path}
+          >
+            <FolderGit2 className="size-3.5 shrink-0 text-primary" />
+            <span className="min-w-0 flex-1 truncate">{node.name}</span>
+          </button>
+        )
+      }
+
+      const isCollapsed = collapsed.has(node.path)
+      return (
+        <div key={node.path}>
+          <button
+            type="button"
+            onClick={() => toggle(node.path)}
+            className="flex w-full items-center gap-1 rounded-md py-1.5 pr-2 text-left text-sm text-foreground transition-colors hover:bg-muted"
+            style={indent}
+          >
+            {isCollapsed ? (
+              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+            ) : (
+              <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+            )}
+            <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate font-medium">{node.name}</span>
+          </button>
+          {!isCollapsed && renderNodes(node.children, depth + 1)}
+        </div>
+      )
+    })
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 text-muted-foreground">
-      <FolderGit2 className="size-10 text-primary" />
-      <div className="text-center">
-        <p className="font-medium text-foreground">打开一个 Git 仓库</p>
-        <p className="mt-1 text-sm">选择本机上的 Git 仓库目录</p>
-      </div>
-      <Button onClick={onOpen} disabled={busy}>
-        <FolderGit2 />
-        打开仓库
-      </Button>
+    <div className="flex min-h-0 flex-1">
+      <aside className="flex w-1/5 min-w-56 shrink-0 flex-col border-r">
+        <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
+          <Home className="size-4 text-primary" />
+          <span className="text-sm font-semibold">Dashboard</span>
+        </div>
+        <ScrollArea className="min-h-0 flex-1">
+          <div className="space-y-4 p-2">
+            <div>
+              <div className="mb-1 flex items-center gap-1.5 px-2 text-xs font-medium uppercase text-muted-foreground">
+                <History className="size-3.5" />
+                Recent
+              </div>
+              <div className="space-y-0.5">
+                {recentProjects.length === 0 && (
+                  <div className="px-2 py-1 text-xs text-muted-foreground">暂无记录</div>
+                )}
+                {recentProjects.map((project) => (
+                  <button
+                    key={project.path}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onOpenProject(project.path)}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+                    title={project.path}
+                  >
+                    <FolderGit2 className="size-3.5 shrink-0 text-primary" />
+                    <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {formatRelativeTime(project.lastOpenedAt)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="mb-1 flex items-center gap-1.5 px-2 text-xs font-medium uppercase text-muted-foreground">
+                <FolderGit2 className="size-3.5" />
+                Repositories
+              </div>
+              {projects.length === 0 ? (
+                <div className="px-2 py-1 text-xs text-muted-foreground">暂无仓库</div>
+              ) : (
+                <div className="space-y-0.5">{renderNodes(tree, 0)}</div>
+              )}
+            </div>
+          </div>
+        </ScrollArea>
+      </aside>
+      <main className="flex min-w-0 flex-1 flex-col items-center justify-center gap-4 text-muted-foreground">
+        <FolderGit2 className="size-10 text-primary" />
+        <div className="text-center">
+          <p className="font-medium text-foreground">打开一个 Git 仓库</p>
+          <p className="mt-1 text-sm">从左侧选择最近或已登记的仓库，或选择本机上的 Git 仓库目录</p>
+        </div>
+        <Button onClick={onOpen} disabled={busy}>
+          <FolderGit2 />
+          打开仓库
+        </Button>
+      </main>
     </div>
   )
 }

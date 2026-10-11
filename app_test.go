@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseStatus(t *testing.T) {
@@ -324,6 +325,57 @@ func TestPull(t *testing.T) {
 	}
 }
 
+func TestPush(t *testing.T) {
+	root := t.TempDir()
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	if err := os.MkdirAll(remote, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, root, "init", "-q", "-b", "main")
+	git(t, root, "config", "user.name", "Test User")
+	git(t, root, "config", "user.email", "test@example.com")
+	write(t, root, "first.txt", "one\n")
+	git(t, root, "add", "first.txt")
+	git(t, root, "commit", "-qm", "初始提交")
+	git(t, remote, "init", "-q", "--bare", "-b", "main")
+	git(t, root, "remote", "add", "origin", remote)
+
+	app := &App{}
+
+	// 首次推送新分支并建立跟踪引用。
+	repo, err := app.Push(root, "origin", "main", "", true, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	branch := repo.Branches[0]
+	if !branch.Current || branch.Upstream != "origin/main" {
+		t.Fatalf("expected main tracking origin/main, got %+v", branch)
+	}
+
+	// 推送到不同命名的远程分支。
+	git(t, root, "checkout", "-qb", "feature")
+	write(t, root, "feature.txt", "feature\n")
+	git(t, root, "add", "feature.txt")
+	git(t, root, "commit", "-qm", "功能提交")
+	if _, err := app.Push(root, "origin", "feature", "feature", false, false, false); err != nil {
+		t.Fatal(err)
+	}
+	list := git(t, remote, "for-each-ref", "--format=%(refname:short)", "refs/heads")
+	if !strings.Contains(strings.ReplaceAll(list, "\r\n", "\n"), "feature") {
+		t.Fatalf("expected remote branch feature, got %q", list)
+	}
+
+	// 推送全部标签。
+	git(t, root, "tag", "v1.0")
+	if _, err := app.Push(root, "origin", "feature", "", false, true, false); err != nil {
+		t.Fatal(err)
+	}
+	tags := git(t, remote, "tag", "-l")
+	if !strings.Contains(strings.ReplaceAll(tags, "\r\n", "\n"), "v1.0") {
+		t.Fatalf("expected remote tag v1.0, got %q", tags)
+	}
+}
+
 func TestDiscardChange(t *testing.T) {
 	root := t.TempDir()
 	git(t, root, "init", "-q", "-b", "main")
@@ -447,6 +499,62 @@ func TestChangeAbsPath(t *testing.T) {
 		t.Fatal("expected error for escaping path")
 	}
 	if _, err := changeAbsPath(root, ""); err == nil {
+		t.Fatal("expected error for empty path")
+	}
+}
+
+func TestProjectStore(t *testing.T) {
+	store, err := NewProjectStore(filepath.Join(t.TempDir(), "projects.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if err := store.RecordProject(filepath.Join("D:", "work", "alpha"), "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordProject(filepath.Join("D:", "work", "beta"), ""); err != nil {
+		t.Fatal(err)
+	}
+	// 重新打开 alpha 应刷新其最近打开时间。
+	if err := store.RecordProject(filepath.Join("D:", "work", "alpha"), "alpha"); err != nil {
+		t.Fatal(err)
+	}
+
+	recent, err := store.RecentProjects(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recent) != 2 {
+		t.Fatalf("expected 2 recent projects, got %d", len(recent))
+	}
+	if recent[0].Path != filepath.Join("D:", "work", "alpha") {
+		t.Fatalf("expected alpha most recent, got %q", recent[0].Path)
+	}
+	if recent[1].Name != "beta" {
+		t.Fatalf("expected derived name beta, got %q", recent[1].Name)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, recent[0].LastOpenedAt); err != nil {
+		t.Fatalf("invalid lastOpenedAt %q: %v", recent[0].LastOpenedAt, err)
+	}
+
+	limited, err := store.RecentProjects(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(limited) != 1 || limited[0].Path != recent[0].Path {
+		t.Fatalf("expected only %q, got %+v", recent[0].Path, limited)
+	}
+
+	all, err := store.AllProjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 || all[0].Path >= all[1].Path {
+		t.Fatalf("expected projects ordered by path, got %+v", all)
+	}
+
+	if err := store.RecordProject("", "x"); err == nil {
 		t.Fatal("expected error for empty path")
 	}
 }

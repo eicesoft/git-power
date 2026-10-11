@@ -3,10 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
-	goruntime "runtime"
 	"path/filepath"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ type App struct {
 	logMu      sync.Mutex
 	gitLogs    []GitCommandLog
 	logCounter int64
+	projects   *ProjectStore
 }
 
 // gitAction 标识前端请求的具体远程或临时保存操作。
@@ -102,6 +104,11 @@ type Change struct {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	if store, err := NewProjectStore(projectStorePath()); err != nil {
+		log.Printf("初始化本地仓库存储失败: %v", err)
+	} else {
+		a.projects = store
+	}
 	setGitCommandLogSink(a.appendGitLog)
 }
 
@@ -149,6 +156,30 @@ func (a *App) SelectRepository() (Repository, error) {
 // RefreshRepository 重新读取仓库当前状态。
 func (a *App) RefreshRepository(path string) (Repository, error) {
 	return LoadRepository(path)
+}
+
+// RecordProject 登记一次仓库打开记录，供 Dashboard 的 Recent 与 Repositories 展示。
+func (a *App) RecordProject(path, name string) error {
+	if a.projects == nil {
+		return fmt.Errorf("本地仓库存储不可用")
+	}
+	return a.projects.RecordProject(path, name)
+}
+
+// ListRecentProjects 返回最近打开的最多 10 个仓库。
+func (a *App) ListRecentProjects() ([]ProjectInfo, error) {
+	if a.projects == nil {
+		return []ProjectInfo{}, nil
+	}
+	return a.projects.RecentProjects(10)
+}
+
+// ListDashboardRepositories 返回全部已登记仓库，按路径排序供目录树展示。
+func (a *App) ListDashboardRepositories() ([]ProjectInfo, error) {
+	if a.projects == nil {
+		return []ProjectInfo{}, nil
+	}
+	return a.projects.AllProjects()
 }
 
 // GetGitCommandLogs 返回最近的 Git 命令日志。
@@ -373,6 +404,40 @@ func (a *App) Pull(path, remote, branch string, rebase, stash bool) (Repository,
 		if _, err := runGit(path, "stash", "pop"); err != nil {
 			return Repository{}, fmt.Errorf("拉取成功，但恢复暂存更改失败，请手动执行 git stash pop: %w", err)
 		}
+	}
+	return LoadRepository(path)
+}
+
+// Push 推送本地分支到远程分支，支持设置上游跟踪、推送全部标签和强制推送。
+func (a *App) Push(path, remote, branch, target string, tracking, tags, force bool) (Repository, error) {
+	remote = strings.TrimSpace(remote)
+	branch = strings.TrimSpace(branch)
+	target = strings.TrimSpace(target)
+	if remote == "" || branch == "" {
+		return Repository{}, fmt.Errorf("远程和分支不能为空")
+	}
+	if target == "" {
+		target = branch
+	}
+
+	args := []string{"push"}
+	if force {
+		args = append(args, "--force")
+	}
+	if tags {
+		args = append(args, "--tags")
+	}
+	if tracking {
+		args = append(args, "-u")
+	}
+	args = append(args, remote)
+	if target == branch {
+		args = append(args, branch)
+	} else {
+		args = append(args, branch+":"+target)
+	}
+	if _, err := runGit(path, args...); err != nil {
+		return Repository{}, fmt.Errorf("推送失败: %w", err)
 	}
 	return LoadRepository(path)
 }

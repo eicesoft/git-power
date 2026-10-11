@@ -22,9 +22,17 @@ export function GitAction(arg1:string,arg2:string):Promise<main.Repository>;
 
 export function IgnoreChange(arg1:string,arg2:string):Promise<main.Repository>;
 
+export function ListDashboardRepositories():Promise<Array<main.ProjectInfo>>;
+
+export function ListRecentProjects():Promise<Array<main.ProjectInfo>>;
+
 export function OpenChange(arg1:string,arg2:string):Promise<void>;
 
 export function Pull(arg1:string,arg2:string,arg3:string,arg4:boolean,arg5:boolean):Promise<main.Repository>;
+
+export function Push(arg1:string,arg2:string,arg3:string,arg4:string,arg5:boolean,arg6:boolean,arg7:boolean):Promise<main.Repository>;
+
+export function RecordProject(arg1:string,arg2:string):Promise<void>;
 
 export function RefreshRepository(arg1:string):Promise<main.Repository>;
 

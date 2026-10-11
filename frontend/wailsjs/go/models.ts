@@ -149,6 +149,22 @@ export namespace main {
 	        this.success = source["success"];
 	    }
 	}
+	export class ProjectInfo {
+	    path: string;
+	    name: string;
+	    lastOpenedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProjectInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.name = source["name"];
+	        this.lastOpenedAt = source["lastOpenedAt"];
+	    }
+	}
 	export class Repository {
 	    path: string;
 	    name: string;

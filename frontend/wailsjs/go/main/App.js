@@ -42,12 +42,28 @@ export function IgnoreChange(arg1, arg2) {
   return window['go']['main']['App']['IgnoreChange'](arg1, arg2);
 }
 
+export function ListDashboardRepositories() {
+  return window['go']['main']['App']['ListDashboardRepositories']();
+}
+
+export function ListRecentProjects() {
+  return window['go']['main']['App']['ListRecentProjects']();
+}
+
 export function OpenChange(arg1, arg2) {
   return window['go']['main']['App']['OpenChange'](arg1, arg2);
 }
 
 export function Pull(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['Pull'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function Push(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
+  return window['go']['main']['App']['Push'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
+}
+
+export function RecordProject(arg1, arg2) {
+  return window['go']['main']['App']['RecordProject'](arg1, arg2);
 }
 
 export function RefreshRepository(arg1) {

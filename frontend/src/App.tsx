@@ -598,23 +598,6 @@ function App() {
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1">
             <aside className="flex w-64 shrink-0 flex-col border-r">
-            <Tabs
-              value={workspaceView}
-              onValueChange={(value) => setWorkspaceView(value as 'local' | 'commits')}
-              className="shrink-0 border-b p-1"
-            >
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="local" className="gap-1.5">
-                  <FileText className="size-4" />
-                  Local Changes
-                </TabsTrigger>
-                <TabsTrigger value="commits" className="gap-1.5">
-                  <History className="size-4" />
-                  Commits
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-
             <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
               <div className="flex items-center gap-2">
                 <GitBranch className="size-4 text-primary" />
@@ -686,7 +669,24 @@ function App() {
 
           <main className="flex min-w-0 flex-1 flex-col bg-muted/30">
           {activeRepository && (
-            <div className="flex h-[56px] shrink-0 items-center justify-center gap-10 border-b px-2 py-1" style={noDragStyle}>
+            <div className="flex h-[56px] shrink-0 items-center border-b px-2 py-1" style={noDragStyle}>
+            <Tabs
+              value={workspaceView}
+              onValueChange={(value) => setWorkspaceView(value as 'local' | 'commits')}
+              className="shrink-0"
+            >
+              <TabsList className="grid h-11! grid-cols-2 p-0">
+                <TabsTrigger value="local" className="h-full flex-col gap-0.5 px-2 text-[10px] text-muted-foreground">
+                  <FileText className="size-5" />
+                  Local Changes
+                </TabsTrigger>
+                <TabsTrigger value="commits" className="h-full flex-col gap-0.5 px-2 text-[10px] text-muted-foreground">
+                  <History className="size-5" />
+                  Commits
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <div className="flex min-w-0 flex-1 items-center justify-center gap-10">
             <div className="flex items-center rounded-md">
               {toolbarActions.map((item, index) => (
                 <Fragment key={item.action}>
@@ -958,6 +958,7 @@ function App() {
                 </Menu.Positioner>
               </Menu.Portal>
             </Menu.Root>
+            </div>
           </div>
         )}
             {workspaceView === 'local' ? (

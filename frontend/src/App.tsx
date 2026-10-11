@@ -46,6 +46,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { Toaster, toastError } from '@/components/ui/toast'
 import { Environment, ClipboardSetText } from '../wailsjs/runtime/runtime'
 import {
   ClearGitCommandLogs,
@@ -119,6 +120,23 @@ function errorMessage(error: unknown) {
 function formatDate(value: string) {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+
+function formatRelativeTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const now = new Date()
+  const minutes = Math.floor((now.getTime() - date.getTime()) / 60000)
+  if (minutes < 10) return '刚刚'
+  if (minutes < 60) return `${minutes}分钟前`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}小时前`
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const dayDiff = Math.floor((startOfDay(now) - startOfDay(date)) / 86400000)
+  if (dayDiff === 1) return '昨天'
+  if (dayDiff === 2) return '前天'
+  if (dayDiff < 7) return `${dayDiff}天前`
+  return formatDate(value)
 }
 
 function statusLabel(status: string) {
@@ -238,7 +256,6 @@ function App() {
   const [branchName, setBranchName] = useState('')
   const [creatingBranch, setCreatingBranch] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
   const [platform, setPlatform] = useState('')
   const [windowMaximised, setWindowMaximised] = useState(false)
   const [gitCommandLogs, setGitCommandLogs] = useState<GitCommandLogItem[]>([])
@@ -271,7 +288,7 @@ function App() {
   const refreshGitCommandLogs = () => {
     GetGitCommandLogs()
       .then(setGitCommandLogs)
-      .catch((logError) => setError(errorMessage(logError)))
+      .catch((logError) => toastError(errorMessage(logError)))
   }
 
   useEffect(() => {
@@ -291,11 +308,10 @@ function App() {
 
   const runAction = async (action: () => Promise<Repository>) => {
     setBusy(true)
-    setError('')
     try {
       updateRepository(await action())
     } catch (actionError) {
-      setError(errorMessage(actionError))
+      toastError(errorMessage(actionError))
     } finally {
       setBusy(false)
       refreshGitCommandLogs()
@@ -304,12 +320,11 @@ function App() {
 
   const openRepository = async () => {
     setBusy(true)
-    setError('')
     try {
       const repository = await SelectRepository()
       if (repository.path) updateRepository(repository)
     } catch (actionError) {
-      setError(errorMessage(actionError))
+      toastError(errorMessage(actionError))
     } finally {
       setBusy(false)
     }
@@ -370,14 +385,14 @@ function App() {
 
   const openChange = (change: Change) => {
     if (!activePath) return
-    OpenChange(activePath, change.path).catch((openError) => setError(errorMessage(openError)))
+    OpenChange(activePath, change.path).catch((openError) => toastError(errorMessage(openError)))
   }
 
   const copyChangePath = (change: Change) => {
     if (!activePath) return
     GetChangePath(activePath, change.path)
       .then((absolutePath) => ClipboardSetText(absolutePath))
-      .catch((copyError) => setError(errorMessage(copyError)))
+      .catch((copyError) => toastError(errorMessage(copyError)))
   }
 
   const ignoreChange = (change: Change) => {
@@ -398,7 +413,7 @@ function App() {
     const subject = (commitSubjects[path] ?? '').trim()
     const description = (commitDescriptions[path] ?? '').trim()
     if (!subject) {
-      setError('提交主题不能为空')
+      toastError('提交主题不能为空', '无法提交')
       return
     }
     const message = [subject, description].filter(Boolean).join('\n\n')
@@ -448,7 +463,7 @@ function App() {
         if (!cancelled) setChangeDiff(diff)
       })
       .catch((diffError) => {
-        if (!cancelled) setError(errorMessage(diffError))
+        if (!cancelled) toastError(errorMessage(diffError))
       })
       .finally(() => {
         if (!cancelled) setDetailLoading(false)
@@ -478,7 +493,7 @@ function App() {
         if (!cancelled) setCommitDetail(detail)
       })
       .catch((detailError) => {
-        if (!cancelled) setError(errorMessage(detailError))
+        if (!cancelled) toastError(errorMessage(detailError))
       })
       .finally(() => {
         if (!cancelled) setDetailLoading(false)
@@ -577,18 +592,6 @@ function App() {
         )}
       </header>
 
-      {error && (
-        <div
-          role="alert"
-          className="flex shrink-0 items-center justify-between border-b bg-destructive/10 px-3 py-2 text-sm text-destructive"
-        >
-          <span className="truncate">{error}</span>
-          <Button variant="ghost" size="icon" className="size-7" onClick={() => setError('')} title="关闭错误">
-            <X />
-          </Button>
-        </div>
-      )}
-
       {!activeRepository ? (
         <OpenRepositoryPage busy={busy} onOpen={openRepository} />
       ) : (
@@ -670,12 +673,11 @@ function App() {
                   aheadCommits={aheadCommits}
                   onSelect={switchBranch}
                 />
-                <BranchGroup
+                <RemoteBranchTree
                   title="远程分支"
                   icon={<Cloud className="size-3.5" />}
                   branches={remoteBranches}
                   busy={busy}
-                  aheadCommits={0}
                   onSelect={switchBranch}
                 />
               </div>
@@ -782,7 +784,7 @@ function App() {
                           onClick={() => {
                             ClearGitCommandLogs()
                               .then(setGitCommandLogs)
-                              .catch((logError) => setError(errorMessage(logError)))
+                              .catch((logError) => toastError(errorMessage(logError)))
                           }}
                           disabled={gitCommandLogs.length === 0}
                         >
@@ -1177,21 +1179,15 @@ function App() {
                   </TabsContent>
 
                   <TabsContent value="files" className="min-h-0 flex-1 overflow-hidden">
-                    <ScrollArea className="h-full">
-                      {!commitDetail ? (
-                        <div className="p-6 text-center text-sm text-muted-foreground">
-                          {detailLoading ? '读取更改文件...' : '暂无更改文件'}
-                        </div>
-                      ) : commitDetail.files.length === 0 ? (
-                        <div className="p-6 text-center text-sm text-muted-foreground">无更改文件</div>
-                      ) : (
-                        <div className="divide-y">
-                          {commitDetail.files.map((file) => (
-                            <CommitFileRow key={`${file.status}:${file.path}`} file={file} />
-                          ))}
-                        </div>
-                      )}
-                    </ScrollArea>
+                    {!commitDetail ? (
+                      <div className="p-6 text-center text-sm text-muted-foreground">
+                        {detailLoading ? '读取更改文件...' : '暂无更改文件'}
+                      </div>
+                    ) : commitDetail.files.length === 0 ? (
+                      <div className="p-6 text-center text-sm text-muted-foreground">无更改文件</div>
+                    ) : (
+                      <CommitFileList files={commitDetail.files} />
+                    )}
                   </TabsContent>
                 </Tabs>
               </div>
@@ -1292,19 +1288,191 @@ function BranchGroup({
   )
 }
 
-function CommitFileRow({ file }: { file: CommitFileItem }) {
+type RemoteBranchNode = {
+  name: string
+  path: string
+  branch: Branch | null
+  children: RemoteBranchNode[]
+}
+
+function buildRemoteBranchTree(branches: Branch[]): RemoteBranchNode[] {
+  const root: RemoteBranchNode = { name: '', path: '', branch: null, children: [] }
+  branches.forEach((branch) => {
+    const segments = branch.name.split('/')
+    let parent = root
+    segments.forEach((segment, index) => {
+      const path = segments.slice(0, index + 1).join('/')
+      let node = parent.children.find((item) => item.name === segment && !item.branch)
+      if (!node) {
+        node = { name: segment, path, branch: null, children: [] }
+        parent.children.push(node)
+      }
+      if (index === segments.length - 1) node.branch = branch
+      parent = node
+    })
+  })
+  return root.children
+}
+
+function countRemoteBranches(node: RemoteBranchNode): number {
+  if (node.branch) return 1
+  return node.children.reduce((sum, child) => sum + countRemoteBranches(child), 0)
+}
+
+function RemoteBranchTree({
+  title,
+  icon,
+  branches,
+  busy,
+  onSelect,
+}: {
+  title: string
+  icon: ReactNode
+  branches: Branch[]
+  busy: boolean
+  onSelect: (branch: Branch) => void
+}) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
+  const tree = useMemo(() => buildRemoteBranchTree(branches), [branches])
+
+  const toggle = (path: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+
+  const renderNodes = (nodes: RemoteBranchNode[], depth: number): ReactNode[] =>
+    nodes.map((node) => {
+      const indent = { paddingLeft: depth * 12 + 8 }
+      if (node.branch) {
+        return (
+          <button
+            key={node.branch.ref}
+            type="button"
+            disabled={busy}
+            onClick={() => onSelect(node.branch!)}
+            className="flex w-full items-center gap-2 rounded-md py-1.5 pr-2 text-left text-sm text-foreground transition-colors hover:bg-muted"
+            style={indent}
+            title={node.branch.upstream ? `上游: ${node.branch.upstream}` : node.branch.ref}
+          >
+            <GitBranch className="size-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">{node.name}</span>
+          </button>
+        )
+      }
+
+      const isCollapsed = collapsed.has(node.path)
+      const NodeIcon = node.path.includes('/') ? Folder : Cloud
+      return (
+        <div key={node.path}>
+          <button
+            type="button"
+            onClick={() => toggle(node.path)}
+            className="flex w-full items-center gap-1 rounded-md py-1.5 pr-2 text-left text-sm text-foreground transition-colors hover:bg-muted"
+            style={indent}
+          >
+            {isCollapsed ? (
+              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+            ) : (
+              <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+            )}
+            <NodeIcon className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate font-medium">{node.name}</span>
+            <Badge variant="outline" className="h-4 min-w-4 justify-center rounded-full px-1 text-[10px]">
+              {countRemoteBranches(node)}
+            </Badge>
+          </button>
+          {!isCollapsed && renderNodes(node.children, depth + 1)}
+        </div>
+      )
+    })
+
   return (
-    <div className="flex items-center gap-3 px-4 py-3">
-      <Badge variant="outline" className="w-16 shrink-0 justify-center">
-        {statusLabel(file.status)}
-      </Badge>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-sm">{file.path}</div>
-        {file.originalPath && (
-          <div className="truncate text-xs text-muted-foreground">原路径: {file.originalPath}</div>
-        )}
+    <div>
+      <div className="mb-1 flex items-center gap-1.5 px-2 text-xs font-medium uppercase text-muted-foreground">
+        {icon}
+        {title}
       </div>
+      {branches.length === 0 ? (
+        <div className="px-2 py-1 text-xs text-muted-foreground">无</div>
+      ) : (
+        <div className="space-y-0.5">{renderNodes(tree, 0)}</div>
+      )}
     </div>
+  )
+}
+
+type CommitFileListItem =
+  | { type: 'directory'; directory: string }
+  | { type: 'file'; directory: string; file: CommitFileItem }
+
+function CommitFileList({ files }: { files: CommitFileItem[] }) {
+  const directories = new Map<string, CommitFileItem[]>()
+  files.forEach((file) => {
+    const separator = file.path.lastIndexOf('/')
+    const directory = separator < 0 ? '' : file.path.slice(0, separator)
+    directories.set(directory, [...(directories.get(directory) ?? []), file])
+  })
+
+  const listItems: CommitFileListItem[] = []
+  directories.forEach((group, directory) => {
+    if (directory) listItems.push({ type: 'directory', directory })
+    group.forEach((file) => listItems.push({ type: 'file', directory, file }))
+  })
+
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const virtualizer = useVirtualizer({
+    count: listItems.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 24,
+    overscan: 10,
+  })
+
+  return (
+    <ScrollArea className="h-full select-none" viewportRef={scrollRef}>
+      <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+        {virtualizer.getVirtualItems().map((virtualItem) => {
+          const item = listItems[virtualItem.index]
+          return (
+            <div
+              key={virtualItem.key}
+              className="absolute left-0 right-0"
+              style={{ top: virtualItem.start, height: virtualItem.size }}
+            >
+              {item.type === 'directory' ? (
+                <div className="flex h-6 items-center gap-2 px-3 text-xs font-medium text-muted-foreground">
+                  <Folder className="size-3 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">{item.directory}</span>
+                </div>
+              ) : (
+                <div className="px-1">
+                  <div
+                    className="flex h-6 items-center gap-2 rounded-md px-2"
+                    title={item.file.originalPath ? `${item.file.originalPath} → ${item.file.path}` : item.file.path}
+                  >
+                    <Badge
+                      variant="outline"
+                      className={`${
+                        statusMark(item.file.status)
+                          ? 'h-4 w-4 px-0 text-[10px] leading-none'
+                          : 'w-16'
+                      } ${statusMark(item.file.status)?.className ?? ''} shrink-0 justify-center`}
+                    >
+                      {statusMark(item.file.status)?.label ?? statusLabel(item.file.status)}
+                    </Badge>
+                    <span className="min-w-0 flex-1 truncate text-xs">
+                      {item.directory ? item.file.path.slice(item.directory.length + 1) : item.file.path}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </ScrollArea>
   )
 }
 
@@ -1343,9 +1511,19 @@ function CommitRow({
             </Badge>
             <span className="truncate font-medium">{commit.subject}</span>
           </div>
-          <span className={`shrink-0 ${selected ? 'text-white' : 'text-muted-foreground'}`}>
-            {formatDate(commit.date)}
-          </span>
+          <Tooltip>
+            <TooltipTrigger
+              render={(props) => (
+                <span
+                  {...props}
+                  className={`shrink-0 ${selected ? 'text-white' : 'text-muted-foreground'}`}
+                />
+              )}
+            >
+              {formatRelativeTime(commit.date)}
+            </TooltipTrigger>
+            <TooltipContent>{formatDate(commit.date)}</TooltipContent>
+          </Tooltip>
         </div>
         {showDecorations && commit.decorations && (
           <div className={`mt-1 truncate ${selected ? 'text-white' : 'text-primary'}`}>

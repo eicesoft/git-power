@@ -3,3 +3,5 @@ build
 bin
 frontend/dist
 git-power
+/.agents
+/.claude

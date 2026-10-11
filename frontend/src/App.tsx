@@ -1,44 +1,73 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Menu } from '@base-ui/react/menu'
+import { Popover } from '@base-ui/react/popover'
+import { ContextMenu } from '@base-ui/react/context-menu'
 import {
   ChevronDown,
+  ChevronRight,
   Archive,
   Check,
   Cloud,
+  Copy,
+  ExternalLink,
+  EyeOff,
   FileText,
   Folder,
   FolderGit2,
   GitBranch,
+  GitCommitHorizontal,
   Home,
   History,
-  List,
   Monitor,
   Download,
   Upload,
   Minus,
   Plus,
   RefreshCw,
+  RotateCcw,
+  Terminal,
   X,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Environment } from '../wailsjs/runtime/runtime'
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Environment, ClipboardSetText } from '../wailsjs/runtime/runtime'
+import {
+  ClearGitCommandLogs,
   Commit,
   CreateBranch,
+  DiscardChange,
+  GetChangePath,
+  GetGitCommandLogs,
   GetChangeDiff,
   GetCommitDetail,
+  IgnoreChange,
+  OpenChange,
   RefreshRepository,
   GitAction,
   SelectRepository,
   StageChange,
   SwitchBranch,
   UnstageChange,
+  WindowClose,
+  WindowIsMaximised,
+  WindowMinimise,
+  WindowToggleMaximise,
 } from '../wailsjs/go/main/App'
 
 type Repository = Awaited<ReturnType<typeof SelectRepository>>
@@ -47,6 +76,7 @@ type CommitItem = Repository['commits'][number]
 type CommitDetailItem = Awaited<ReturnType<typeof GetCommitDetail>>
 type CommitFileItem = CommitDetailItem['files'][number]
 type Change = Repository['changes'][number]
+type GitCommandLogItem = Awaited<ReturnType<typeof GetGitCommandLogs>>[number]
 
 type ChangeListItem =
   | { type: 'directory'; directory: string }
@@ -210,6 +240,12 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [platform, setPlatform] = useState('')
+  const [windowMaximised, setWindowMaximised] = useState(false)
+  const [gitCommandLogs, setGitCommandLogs] = useState<GitCommandLogItem[]>([])
+  const [gitLogOpen, setGitLogOpen] = useState(false)
+  const [gitLogAnchor, setGitLogAnchor] = useState<{ x: number; y: number } | null>(null)
+  const [expandedLogIds, setExpandedLogIds] = useState<Set<number>>(new Set())
+  const [pendingDiscard, setPendingDiscard] = useState<Change | null>(null)
 
   const activeRepository = useMemo(
     () => repositories.find((repository) => repository.path === activePath) ?? null,
@@ -232,6 +268,16 @@ function App() {
       .catch(() => setPlatform(''))
   }, [])
 
+  const refreshGitCommandLogs = () => {
+    GetGitCommandLogs()
+      .then(setGitCommandLogs)
+      .catch((logError) => setError(errorMessage(logError)))
+  }
+
+  useEffect(() => {
+    refreshGitCommandLogs()
+  }, [])
+
   const updateRepository = (repository: Repository) => {
     if (!repository.path) return
     setRepositories((current) => {
@@ -252,6 +298,7 @@ function App() {
       setError(errorMessage(actionError))
     } finally {
       setBusy(false)
+      refreshGitCommandLogs()
     }
   }
 
@@ -319,6 +366,30 @@ function App() {
   const unstageDirectory = (directory: string) => {
     if (!activePath || busy || !directory) return
     runAction(() => UnstageChange(activePath, `${directory}/`, ''))
+  }
+
+  const openChange = (change: Change) => {
+    if (!activePath) return
+    OpenChange(activePath, change.path).catch((openError) => setError(errorMessage(openError)))
+  }
+
+  const copyChangePath = (change: Change) => {
+    if (!activePath) return
+    GetChangePath(activePath, change.path)
+      .then((absolutePath) => ClipboardSetText(absolutePath))
+      .catch((copyError) => setError(errorMessage(copyError)))
+  }
+
+  const ignoreChange = (change: Change) => {
+    if (!activePath || busy) return
+    runAction(() => IgnoreChange(activePath, change.path))
+  }
+
+  const discardChange = () => {
+    if (!activePath || !pendingDiscard || busy) return
+    const change = pendingDiscard
+    setPendingDiscard(null)
+    runAction(() => DiscardChange(activePath, change.path, change.originalPath, change.status))
   }
 
   const commitChanges = () => {
@@ -419,21 +490,14 @@ function App() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
-      {/* 按系统预留窗口控制按钮：macOS 左侧红绿灯，Windows 右侧最小化/最大化/关闭。 */}
       <header
-        className={`flex h-11 shrink-0 items-end gap-1 border-b bg-muted/40 ${
-          platform === 'darwin'
-            ? 'pl-28 pr-2'
-            : platform === 'windows'
-              ? 'pl-2 pr-48'
-              : 'pl-28 pr-48'
-        }`}
+        className={`flex h-11 shrink-0 items-stretch gap-1 border-b bg-muted/40 ${platform === 'darwin' ? 'pl-28 pr-2' : 'pl-2 pr-2'}`}
         style={windowDragStyle}
       >
         <Tabs
           value={activePath ?? 'home'}
           onValueChange={(value) => setActivePath(value === 'home' ? null : String(value))}
-          className="min-w-0 self-center"
+          className="min-w-0 flex-1 self-center"
         >
           <TabsList className="min-w-0 justify-start overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <TabsTrigger
@@ -472,7 +536,45 @@ function App() {
             ))}
           </TabsList>
         </Tabs>
-
+        {platform === 'windows' && (
+          <div className="flex shrink-0 items-stretch" style={noDragStyle}>
+            <button
+              type="button"
+              className="flex w-12 items-center justify-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              onClick={() => WindowMinimise()}
+              title="最小化"
+            >
+              <Minus className="size-4" />
+            </button>
+            <button
+              type="button"
+              className="flex w-12 items-center justify-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              onClick={() =>
+                WindowToggleMaximise().then(() => WindowIsMaximised().then(setWindowMaximised))
+              }
+              title={windowMaximised ? '还原' : '最大化'}
+            >
+              {windowMaximised ? (
+                <svg className="size-3.5" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="0.9">
+                  <rect x="2.5" y="0.5" width="7" height="7" rx="0.5" />
+                  <path d="M0.5 2.5v6a1 1 0 0 0 1 1h6" />
+                </svg>
+              ) : (
+                <svg className="size-3.5" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="0.9">
+                  <rect x="0.75" y="0.75" width="8.5" height="8.5" rx="0.5" />
+                </svg>
+              )}
+            </button>
+            <button
+              type="button"
+              className="flex w-12 items-center justify-center text-muted-foreground transition-colors hover:bg-destructive hover:text-destructive-foreground"
+              onClick={() => WindowClose()}
+              title="关闭"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        )}
       </header>
 
       {error && (
@@ -626,41 +728,205 @@ function App() {
               className="mx-2 flex h-9 min-w-64 max-w-xs flex-1 items-center justify-center gap-1 rounded-md border bg-background px-2"
               title={activeRepository.path}
             >
+              <Popover.Root
+                open={gitLogOpen}
+                onOpenChange={(open) => {
+                  setGitLogOpen(open)
+                  if (open) refreshGitCommandLogs()
+                }}
+              >
+                <Popover.Trigger
+                  render={(props) => (
+                    <Button
+                      {...props}
+                      variant="ghost"
+                      size="icon"
+                      className={`size-6 ${gitLogOpen ? 'text-primary' : ''}`}
+                      title="Git 命令行日志"
+                      onClick={(event) => {
+                        setGitLogAnchor({ x: event.clientX, y: event.clientY })
+                        props.onClick?.(event as ReactMouseEvent<HTMLButtonElement>)
+                      }}
+                    >
+                      <GitCommitHorizontal className="size-4" />
+                    </Button>
+                  )}
+                />
+                <Popover.Portal>
+                  <Popover.Positioner
+                    anchor={() => (gitLogAnchor ? { getBoundingClientRect: () => ({
+                      x: gitLogAnchor.x,
+                      y: gitLogAnchor.y,
+                      top: gitLogAnchor.y,
+                      left: gitLogAnchor.x,
+                      right: gitLogAnchor.x,
+                      bottom: gitLogAnchor.y,
+                      width: 0,
+                      height: 0,
+                    }) } : null)}
+                    side="bottom"
+                    align="center"
+                    sideOffset={16}
+                    collisionPadding={8}
+                  >
+                    <Popover.Popup className="relative w-[min(760px,calc(100vw-2rem))] animate-in fade-in-0 slide-in-from-bottom-2 rounded-xl border bg-popover p-0 shadow-xl outline-none">
+                      <div aria-hidden className="absolute -top-[5px] left-1/2 z-0 size-3 -translate-x-1/2 rotate-45 rounded-[2px] border-t border-l border-border bg-popover" />
+                      <div className="flex h-10 items-center justify-between border-b px-3">
+                        <div className="flex items-center gap-2 text-sm font-medium">
+                          <Terminal className="size-4 text-primary" />
+                          Git 命令行日志
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            ClearGitCommandLogs()
+                              .then(setGitCommandLogs)
+                              .catch((logError) => setError(errorMessage(logError)))
+                          }}
+                          disabled={gitCommandLogs.length === 0}
+                        >
+                          清空
+                        </Button>
+                      </div>
+                      <ScrollArea className="h-80">
+                        {gitCommandLogs.length === 0 ? (
+                          <div className="p-6 text-center text-sm text-muted-foreground">暂无 Git 命令日志</div>
+                        ) : (
+                          <div className="divide-y">
+                            {[...gitCommandLogs].reverse().map((log) => (
+                              <div key={log.id} className="space-y-1 px-3 py-2">
+                                <div className="flex items-start gap-2">
+                                  <button
+                                    type="button"
+                                    className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground"
+                                    title={expandedLogIds.has(log.id) ? '收起输出' : '展开输出'}
+                                    onClick={() =>
+                                      setExpandedLogIds((prev) => {
+                                        const next = new Set(prev)
+                                        if (next.has(log.id)) next.delete(log.id)
+                                        else next.add(log.id)
+                                        return next
+                                      })
+                                    }
+                                  >
+                                    <ChevronRight
+                                      className={`size-3.5 transition-transform ${expandedLogIds.has(log.id) ? 'rotate-90' : ''}`}
+                                    />
+                                  </button>
+                                  <span
+                                    className={`mt-1 size-1.5 shrink-0 rounded-full ${
+                                      log.success ? 'bg-green-500' : 'bg-red-500'
+                                    }`}
+                                  />
+                                  <Tooltip>
+                                    <TooltipTrigger
+                                      render={(props) => (
+                                        <code
+                                          {...props}
+                                          className="min-w-0 flex-1 cursor-pointer truncate font-mono text-xs"
+                                          onClick={() =>
+                                            setExpandedLogIds((prev) => {
+                                              const next = new Set(prev)
+                                              if (next.has(log.id)) next.delete(log.id)
+                                              else next.add(log.id)
+                                              return next
+                                            })
+                                          }
+                                        />
+                                      )}
+                                    >
+                                      {log.command}
+                                    </TooltipTrigger>
+                                    <TooltipContent className="max-w-[min(640px,calc(100vw-2rem))] break-all font-mono">
+                                      {log.command}
+                                    </TooltipContent>
+                                  </Tooltip>
+                                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                                    {log.duration} ms
+                                  </span>
+                                </div>
+                                {log.output && expandedLogIds.has(log.id) && (
+                                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 font-mono text-[11px] text-muted-foreground">
+                                    {log.output}
+                                  </pre>
+                                )}
+                                {log.error && expandedLogIds.has(log.id) && (
+                                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-destructive/10 p-2 font-mono text-[11px] text-destructive">
+                                    {log.error}
+                                  </pre>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </ScrollArea>
+                    </Popover.Popup>
+                  </Popover.Positioner>
+                </Popover.Portal>
+              </Popover.Root>
+              <span
+                className="min-w-0 shrink-0 truncate text-sm font-medium"
+                title={activeRepository.name}
+              >
+                {activeRepository.name}
+              </span>
               <Menu.Root>
                 <Menu.Trigger
                   render={(props) => (
                     <Button
                       {...props}
                       variant="ghost"
-                      size="icon"
-                      className="size-6"
+                      className="h-7 min-w-0 max-w-48 shrink justify-center gap-1 px-2 text-sm"
                       title="选择分支"
                     >
-                      <List className="size-3.5" />
+                      <span className="min-w-0 truncate text-muted-foreground">
+                        {activeRepository.currentBranch || 'main'}
+                      </span>
+                      <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
                     </Button>
                   )}
                 />
                 <Menu.Portal>
-                  <Menu.Positioner align="start">
-                    <Menu.Popup className="max-h-72 min-w-48 overflow-auto rounded-lg border bg-popover p-1 shadow-lg">
+                  <Menu.Positioner align="center">
+                    <Menu.Popup className="max-h-72 min-w-72 overflow-auto rounded-lg border bg-popover p-1 shadow-lg">
+                      <div className="px-2 py-1 text-xs font-medium text-muted-foreground">
+                        本地分支
+                      </div>
                       {localBranches.map((branch) => (
                         <Menu.Item
                           key={branch.name}
-                          className="cursor-pointer rounded px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted"
-                          onSelect={() => switchBranch(branch)}
+                          className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted"
+                                                    onClick={() => switchBranch(branch)}
+                          disabled={branch.current}
                         >
-                          {branch.name}
+                          <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
+                          <span className="min-w-0 flex-1 truncate">{branch.name}</span>
+                          {branch.current && <Check className="size-3.5 shrink-0 text-primary" />}
                         </Menu.Item>
                       ))}
+                      {remoteBranches.length > 0 && (
+                        <>
+                          <Separator className="my-1" />
+                          <div className="px-2 py-1 text-xs font-medium text-muted-foreground">
+                            远程分支
+                          </div>
+                          {remoteBranches.map((branch) => (
+                            <Menu.Item
+                              key={branch.ref}
+                              className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted"
+                                                        onClick={() => switchBranch(branch)}
+                            >
+                              <Cloud className="size-3.5 shrink-0 text-muted-foreground" />
+                              <span className="min-w-0 flex-1 truncate">{branch.name}</span>
+                            </Menu.Item>
+                          ))}
+                        </>
+                      )}
                     </Menu.Popup>
                   </Menu.Positioner>
                 </Menu.Portal>
               </Menu.Root>
-              <div className="flex min-w-0 flex-1 items-center justify-center gap-1 text-sm">
-                <span className="truncate font-medium">{activeRepository.name}</span>
-                <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
-                <span className="truncate text-muted-foreground">{activeRepository.currentBranch || 'main'}</span>
-              </div>
             </div>
 
             <Menu.Root>
@@ -682,7 +948,7 @@ function App() {
                   <Menu.Popup className="min-w-40 rounded-lg border bg-popover p-1 shadow-lg">
                     <Menu.Item
                       className="cursor-pointer rounded px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted"
-                      onSelect={() => window.open(`file://${activeRepository.path}`)}
+                                            onClick={() => window.open(`file://${activeRepository.path}`)}
                     >
                       Finder
                     </Menu.Item>
@@ -720,6 +986,10 @@ function App() {
                           onStageDirectory={stageDirectory}
                           onUnstage={unstageChange}
                           onUnstageDirectory={unstageDirectory}
+                          onOpen={openChange}
+                          onCopyPath={copyChangePath}
+                          onIgnore={ignoreChange}
+                          onDiscard={setPendingDiscard}
                         />
                       </div>
                       <div className="flex min-h-0 flex-[3_1_0%] border-t">
@@ -734,6 +1004,10 @@ function App() {
                           onStageDirectory={stageDirectory}
                           onUnstage={unstageChange}
                           onUnstageDirectory={unstageDirectory}
+                          onOpen={openChange}
+                          onCopyPath={copyChangePath}
+                          onIgnore={ignoreChange}
+                          onDiscard={setPendingDiscard}
                         />
                       </div>
                     </div>
@@ -926,6 +1200,28 @@ function App() {
           </div>
         </div>
       )}
+
+      <AlertDialog
+        open={pendingDiscard !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDiscard(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>丢弃更改</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定丢弃 “{pendingDiscard?.path}” 的所有未提交更改吗？未跟踪文件将被直接删除，此操作无法撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={discardChange}>
+              丢弃
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -974,7 +1270,6 @@ function BranchGroup({
             key={branch.ref}
             type="button"
             disabled={busy || branch.current}
-            onDoubleClick={() => onSelect(branch)}
             className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors ${
               branch.current
                 ? 'bg-primary/10 font-medium text-primary'
@@ -1073,6 +1368,10 @@ function ChangeGroup({
   onStageDirectory,
   onUnstage,
   onUnstageDirectory,
+  onOpen,
+  onCopyPath,
+  onIgnore,
+  onDiscard,
 }: {
   title: string
   changes: Change[]
@@ -1084,6 +1383,10 @@ function ChangeGroup({
   onStageDirectory: (directory: string) => void
   onUnstage: (change: Change) => void
   onUnstageDirectory: (directory: string) => void
+  onOpen: (change: Change) => void
+  onCopyPath: (change: Change) => void
+  onIgnore: (change: Change) => void
+  onDiscard: (change: Change) => void
 }) {
   const directories = new Map<string, Change[]>()
   changes.forEach((change) => {
@@ -1126,23 +1429,21 @@ function ChangeGroup({
                   style={{ top: virtualItem.start, height: virtualItem.size }}
                 >
                   {item.type === 'directory' ? (
-                    <div
-                      className="flex h-6 cursor-pointer items-center gap-2 px-3 text-xs font-medium text-muted-foreground"
-                      onDoubleClick={() => (staged ? onUnstageDirectory : onStageDirectory)(item.directory)}
-                    >
-                      <Folder className="size-3" />
-                      <span className="truncate">{item.directory}</span>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        className="ml-auto"
-                        onClick={() => (staged ? onUnstageDirectory : onStageDirectory)(item.directory)}
-                        disabled={busy}
-                        title={staged ? '取消暂存目录' : '暂存目录'}
-                      >
-                        {staged ? <Minus /> : <Plus />}
-                      </Button>
-                    </div>
+                    <DirectoryRow
+                      key={`dir:${item.directory}`}
+                      directory={item.directory}
+                      untracked={listItems
+                        .filter((entry) => entry.type === 'change' && entry.directory === item.directory)
+                        .every((entry) => entry.type === 'change' && entry.change.status.startsWith('??'))}
+                      staged={staged}
+                      busy={busy}
+                      onStageDirectory={() => onStageDirectory(item.directory)}
+                      onUnstageDirectory={() => onUnstageDirectory(item.directory)}
+                      onOpen={() => onOpen({ path: `${item.directory}/`, originalPath: '', status: '', staged: false, unstaged: true })}
+                      onCopyPath={() => onCopyPath({ path: `${item.directory}/`, originalPath: '', status: '', staged: false, unstaged: true })}
+                      onIgnore={() => onIgnore({ path: `${item.directory}/`, originalPath: '', status: '', staged: false, unstaged: true })}
+                      onDiscard={() => onDiscard({ path: `${item.directory}/`, originalPath: '', status: '??', staged: false, unstaged: true })}
+                    />
                   ) : (
                     <div className="px-1">
                       <ChangeRow
@@ -1158,6 +1459,10 @@ function ChangeGroup({
                         onStage={() => onStage(item.change)}
                         onDoubleClick={() => (staged ? onUnstage : onStage)(item.change)}
                         onUnstage={() => onUnstage(item.change)}
+                        onOpen={() => onOpen(item.change)}
+                        onCopyPath={() => onCopyPath(item.change)}
+                        onIgnore={() => onIgnore(item.change)}
+                        onDiscard={() => onDiscard(item.change)}
                       />
                     </div>
                   )}
@@ -1181,6 +1486,10 @@ function ChangeRow({
   onStage,
   onDoubleClick,
   onUnstage,
+  onOpen,
+  onCopyPath,
+  onIgnore,
+  onDiscard,
 }: {
   change: Change
   staged: boolean
@@ -1191,42 +1500,183 @@ function ChangeRow({
   onStage: () => void
   onDoubleClick: () => void
   onUnstage: () => void
+  onOpen: () => void
+  onCopyPath: () => void
+  onIgnore: () => void
+  onDiscard: () => void
 }) {
   const mark = statusMark(change.status)
+  const deleted = change.status.trim().startsWith('D')
+  const untracked = change.status.startsWith('??')
+  const itemClassName =
+    'flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted data-disabled:pointer-events-none data-disabled:opacity-50'
 
   return (
-    <div
-      onDoubleClick={onDoubleClick}
-      className={`flex h-6 items-center gap-2 rounded-md px-2 transition-colors ${
-        selected ? 'bg-[#0064E1] text-white' : 'hover:bg-muted/60'
-      }`}
-    >
-      <button
-        type="button"
-        onClick={onSelect}
-        className="flex min-w-0 flex-1 items-center gap-2 text-left"
-        title={change.path}
+    <ContextMenu.Root>
+      <ContextMenu.Trigger
+        onContextMenu={onSelect}
+        onDoubleClick={onDoubleClick}
+        className={`flex h-6 items-center gap-2 rounded-md px-2 transition-colors ${
+          selected ? 'bg-[#0064E1] text-white' : 'hover:bg-muted/60'
+        }`}
       >
-        <Badge
-          variant="outline"
-          className={`${mark ? 'h-4 w-4 px-0 text-[10px] leading-none' : 'w-16'} ${mark?.className ?? ''} shrink-0 justify-center ${
-            selected ? `${mark ? '' : 'border-white/40 bg-white/10'} !text-white` : ''
-          }`}
+        <button
+          type="button"
+          onClick={onSelect}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          title={change.path}
         >
-          {mark?.label ?? statusLabel(change.status)}
-        </Badge>
-        <span className="min-w-0 flex-1 truncate text-xs">{displayPath}</span>
-      </button>
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        onClick={staged ? onUnstage : onStage}
-        disabled={busy}
-        title={staged ? '取消暂存' : '暂存更改'}
+          <Badge
+            variant="outline"
+            className={`${mark ? 'h-4 w-4 px-0 text-[10px] leading-none' : 'w-16'} ${mark?.className ?? ''} shrink-0 justify-center ${
+              selected ? `${mark ? '' : 'border-white/40 bg-white/10'} !text-white` : ''
+            }`}
+          >
+            {mark?.label ?? statusLabel(change.status)}
+          </Badge>
+          <span className="min-w-0 flex-1 truncate text-xs">{displayPath}</span>
+        </button>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={staged ? onUnstage : onStage}
+          disabled={busy}
+          title={staged ? '取消暂存' : '暂存更改'}
+        >
+          {staged ? <Minus /> : <Plus />}
+        </Button>
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Positioner align="start" sideOffset={2}>
+          <ContextMenu.Popup className="z-50 min-w-44 rounded-lg border bg-popover p-1 shadow-lg outline-none">
+            <ContextMenu.Item
+              className={itemClassName}
+              disabled={busy || deleted}
+              onClick={onOpen}
+            >
+              <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />
+              打开
+            </ContextMenu.Item>
+            <ContextMenu.Item
+              className={itemClassName}
+              disabled={busy}
+              onClick={staged ? onUnstage : onStage}
+            >
+              {staged ? <Minus className="size-3.5 shrink-0 text-muted-foreground" /> : <Plus className="size-3.5 shrink-0 text-muted-foreground" />}
+              {staged ? '取消暂存' : '暂存'}
+            </ContextMenu.Item>
+            <Separator className="my-1" />
+            <ContextMenu.Item
+              className={itemClassName}
+              disabled={busy}
+              onClick={onDiscard}
+            >
+              <RotateCcw className="size-3.5 shrink-0 text-muted-foreground" />
+              丢弃更改...
+            </ContextMenu.Item>
+            <ContextMenu.Item
+              className={itemClassName}
+              disabled={busy || !untracked}
+              onClick={onIgnore}
+              title={untracked ? undefined : '仅未跟踪的文件可以忽略'}
+            >
+              <EyeOff className="size-3.5 shrink-0 text-muted-foreground" />
+              忽略
+            </ContextMenu.Item>
+            <Separator className="my-1" />
+            <ContextMenu.Item className={itemClassName} onClick={onCopyPath}>
+              <Copy className="size-3.5 shrink-0 text-muted-foreground" />
+              复制路径
+            </ContextMenu.Item>
+          </ContextMenu.Popup>
+        </ContextMenu.Positioner>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
+  )
+}
+
+function DirectoryRow({
+  directory,
+  untracked,
+  staged,
+  busy,
+  onStageDirectory,
+  onUnstageDirectory,
+  onOpen,
+  onCopyPath,
+  onIgnore,
+  onDiscard,
+}: {
+  directory: string
+  untracked: boolean
+  staged: boolean
+  busy: boolean
+  onStageDirectory: () => void
+  onUnstageDirectory: () => void
+  onOpen: () => void
+  onCopyPath: () => void
+  onIgnore: () => void
+  onDiscard: () => void
+}) {
+  const itemClassName =
+    'flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted data-disabled:pointer-events-none data-disabled:opacity-50'
+
+  return (
+    <ContextMenu.Root>
+      <ContextMenu.Trigger
+        onDoubleClick={() => (staged ? onUnstageDirectory : onStageDirectory)()}
+        className="flex h-6 cursor-pointer items-center gap-2 px-3 text-xs font-medium text-muted-foreground"
       >
-        {staged ? <Minus /> : <Plus />}
-      </Button>
-    </div>
+        <Folder className="size-3 shrink-0" />
+        <span className="min-w-0 flex-1 truncate">{directory}</span>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="ml-auto"
+          onClick={() => (staged ? onUnstageDirectory : onStageDirectory)()}
+          disabled={busy}
+          title={staged ? '取消暂存目录' : '暂存目录'}
+        >
+          {staged ? <Minus /> : <Plus />}
+        </Button>
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Positioner align="start" sideOffset={2}>
+          <ContextMenu.Popup className="z-50 min-w-44 rounded-lg border bg-popover p-1 shadow-lg outline-none">
+            <ContextMenu.Item className={itemClassName} disabled={busy} onClick={onOpen}>
+              <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />
+              打开
+            </ContextMenu.Item>
+            <ContextMenu.Item
+              className={itemClassName}
+              disabled={busy}
+              onClick={staged ? onUnstageDirectory : onStageDirectory}
+            >
+              {staged ? <Minus className="size-3.5 shrink-0 text-muted-foreground" /> : <Plus className="size-3.5 shrink-0 text-muted-foreground" />}
+              {staged ? '取消暂存' : '暂存'}
+            </ContextMenu.Item>
+            {untracked && (
+              <>
+                <Separator className="my-1" />
+                <ContextMenu.Item className={itemClassName} disabled={busy} onClick={onDiscard}>
+                  <RotateCcw className="size-3.5 shrink-0 text-muted-foreground" />
+                  丢弃更改...
+                </ContextMenu.Item>
+                <ContextMenu.Item className={itemClassName} disabled={busy} onClick={onIgnore}>
+                  <EyeOff className="size-3.5 shrink-0 text-muted-foreground" />
+                  忽略
+                </ContextMenu.Item>
+              </>
+            )}
+            <Separator className="my-1" />
+            <ContextMenu.Item className={itemClassName} onClick={onCopyPath}>
+              <Copy className="size-3.5 shrink-0 text-muted-foreground" />
+              复制路径
+            </ContextMenu.Item>
+          </ContextMenu.Popup>
+        </ContextMenu.Positioner>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   )
 }
 

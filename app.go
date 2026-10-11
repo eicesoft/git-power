@@ -3,17 +3,24 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	goruntime "runtime"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App 提供仓库读取和常用 Git 操作。
 type App struct {
-	ctx context.Context
+	ctx        context.Context
+	logMu      sync.Mutex
+	gitLogs    []GitCommandLog
+	logCounter int64
 }
 
 // gitAction 标识前端请求的具体远程或临时保存操作。
@@ -25,6 +32,18 @@ const (
 	gitPush  gitAction = "push"
 	gitStash gitAction = "stash"
 )
+
+const maxGitCommandLogs = 200
+
+type GitCommandLog struct {
+	ID        int64  `json:"id"`
+	Command   string `json:"command"`
+	Output    string `json:"output"`
+	Error     string `json:"error"`
+	StartedAt string `json:"startedAt"`
+	Duration  int64  `json:"duration"`
+	Success   bool   `json:"success"`
+}
 
 type Repository struct {
 	Path          string   `json:"path"`
@@ -81,6 +100,31 @@ type Change struct {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	setGitCommandLogSink(a.appendGitLog)
+}
+
+// WindowMinimise 最小化窗口。
+func (a *App) WindowMinimise() {
+	runtime.WindowMinimise(a.ctx)
+}
+
+// WindowToggleMaximise 在最大化与还原之间切换窗口。
+func (a *App) WindowToggleMaximise() {
+	if runtime.WindowIsMaximised(a.ctx) {
+		runtime.WindowUnmaximise(a.ctx)
+	} else {
+		runtime.WindowMaximise(a.ctx)
+	}
+}
+
+// WindowIsMaximised 查询窗口是否已最大化。
+func (a *App) WindowIsMaximised() bool {
+	return runtime.WindowIsMaximised(a.ctx)
+}
+
+// WindowClose 关闭窗口。
+func (a *App) WindowClose() {
+	runtime.Quit(a.ctx)
 }
 
 // SelectRepository 打开系统目录选择器并读取所选 Git 仓库。
@@ -103,6 +147,45 @@ func (a *App) SelectRepository() (Repository, error) {
 // RefreshRepository 重新读取仓库当前状态。
 func (a *App) RefreshRepository(path string) (Repository, error) {
 	return LoadRepository(path)
+}
+
+// GetGitCommandLogs 返回最近的 Git 命令日志。
+func (a *App) GetGitCommandLogs() []GitCommandLog {
+	a.logMu.Lock()
+	defer a.logMu.Unlock()
+	logs := make([]GitCommandLog, len(a.gitLogs))
+	copy(logs, a.gitLogs)
+	return logs
+}
+
+// ClearGitCommandLogs 清空 Git 命令日志。
+func (a *App) ClearGitCommandLogs() []GitCommandLog {
+	a.logMu.Lock()
+	defer a.logMu.Unlock()
+	a.gitLogs = nil
+	return []GitCommandLog{}
+}
+
+func (a *App) appendGitLog(log GitCommandLog) {
+	a.logMu.Lock()
+	defer a.logMu.Unlock()
+	a.logCounter++
+	log.ID = a.logCounter
+	a.gitLogs = append(a.gitLogs, log)
+	if len(a.gitLogs) > maxGitCommandLogs {
+		a.gitLogs = a.gitLogs[len(a.gitLogs)-maxGitCommandLogs:]
+	}
+}
+
+var (
+	gitCommandLogMu   sync.RWMutex
+	gitCommandLogSink func(GitCommandLog)
+)
+
+func setGitCommandLogSink(sink func(GitCommandLog)) {
+	gitCommandLogMu.Lock()
+	defer gitCommandLogMu.Unlock()
+	gitCommandLogSink = sink
 }
 
 // LoadRepository 读取分支、提交历史和工作区更改。
@@ -262,6 +345,114 @@ func (a *App) GetChangeDiff(path, file, original, status string, staged bool) (s
 		args = append(args, ":(literal)"+original)
 	}
 	return runGit(path, args...)
+}
+
+// GetChangePath 返回更改文件在磁盘上的绝对路径。
+func (a *App) GetChangePath(path, file string) (string, error) {
+	return changeAbsPath(path, file)
+}
+
+// OpenChange 使用系统默认程序打开工作区中的单个文件。
+func (a *App) OpenChange(path, file string) error {
+	abs, err := changeAbsPath(path, file)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(abs); err != nil {
+		return fmt.Errorf("文件不存在: %s", abs)
+	}
+	return openWithSystem(abs)
+}
+
+// DiscardChange 丢弃单个文件的未提交更改；未跟踪的文件或目录会被直接删除。
+func (a *App) DiscardChange(path, file, original, status string) (Repository, error) {
+	file = strings.TrimSpace(file)
+	if file == "" {
+		return Repository{}, fmt.Errorf("文件路径不能为空")
+	}
+
+	if strings.HasPrefix(strings.TrimSpace(status), "?") {
+		abs, err := changeAbsPath(path, file)
+		if err != nil {
+			return Repository{}, err
+		}
+		if err := os.RemoveAll(abs); err != nil {
+			return Repository{}, fmt.Errorf("删除未跟踪文件失败: %w", err)
+		}
+	} else {
+		args := []string{"restore", "--source=HEAD", "--staged", "--worktree", "--", ":(literal)" + file}
+		if original != "" && original != file {
+			args = append(args, ":(literal)"+original)
+		}
+		if _, err := runGit(path, args...); err != nil {
+			return Repository{}, fmt.Errorf("丢弃更改失败: %w", err)
+		}
+	}
+	return LoadRepository(path)
+}
+
+// IgnoreChange 将单个文件或目录追加到仓库根目录的 .gitignore。
+func (a *App) IgnoreChange(path, file string) (Repository, error) {
+	file = strings.TrimSpace(file)
+	if file == "" {
+		return Repository{}, fmt.Errorf("文件路径不能为空")
+	}
+
+	entry := "/" + strings.TrimSuffix(file, "/")
+	gitignorePath := filepath.Join(path, ".gitignore")
+	existing, err := os.ReadFile(gitignorePath)
+	if err != nil && !os.IsNotExist(err) {
+		return Repository{}, fmt.Errorf("读取 .gitignore 失败: %w", err)
+	}
+
+	for _, line := range strings.Split(string(existing), "\n") {
+		if strings.TrimSpace(line) == entry {
+			return LoadRepository(path)
+		}
+	}
+
+	content := string(existing)
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	content += entry + "\n"
+	if err := os.WriteFile(gitignorePath, []byte(content), 0o644); err != nil {
+		return Repository{}, fmt.Errorf("写入 .gitignore 失败: %w", err)
+	}
+	return LoadRepository(path)
+}
+
+// changeAbsPath 将仓库内相对路径解析为仓库根目录内的绝对路径，并拒绝越界访问。
+func changeAbsPath(path, file string) (string, error) {
+	file = strings.TrimSpace(file)
+	if file == "" {
+		return "", fmt.Errorf("文件路径不能为空")
+	}
+	root, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("解析仓库路径失败: %w", err)
+	}
+	abs := filepath.Clean(filepath.Join(root, filepath.FromSlash(file)))
+	if abs != root && !strings.HasPrefix(abs, root+string(os.PathSeparator)) {
+		return "", fmt.Errorf("文件路径越界")
+	}
+	return abs, nil
+}
+
+func openWithSystem(abs string) error {
+	var cmd *exec.Cmd
+	switch goruntime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", abs)
+	case "darwin":
+		cmd = exec.Command("open", abs)
+	default:
+		cmd = exec.Command("xdg-open", abs)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("打开文件失败: %w", err)
+	}
+	return cmd.Process.Release()
 }
 
 // GetCommitDetail 返回单个提交的说明和变更文件列表。
@@ -469,7 +660,15 @@ func parseCommitFiles(output string) []CommitFile {
 
 func runGitNoIndex(path, file string) (string, error) {
 	cmd := exec.Command("git", "-C", path, "diff", "--no-index", "--", "/dev/null", file)
+	startedAt := time.Now()
 	output, err := cmd.CombinedOutput()
+	commandArgs := []string{"-C", path, "diff", "--no-index", "--", "/dev/null", file}
+	success := err == nil || (cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 1)
+	recordErr := err
+	if success {
+		recordErr = nil
+	}
+	recordGitCommand(commandArgs, output, recordErr, success, startedAt, time.Since(startedAt))
 	if err != nil && (cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != 1) {
 		message := strings.TrimSpace(string(output))
 		if message == "" {
@@ -483,7 +682,9 @@ func runGitNoIndex(path, file string) (string, error) {
 func runGit(path string, args ...string) (string, error) {
 	commandArgs := append([]string{"-C", path}, args...)
 	cmd := exec.Command("git", commandArgs...)
+	startedAt := time.Now()
 	output, err := cmd.CombinedOutput()
+	recordGitCommand(commandArgs, output, err, err == nil, startedAt, time.Since(startedAt))
 	if err != nil {
 		message := strings.TrimSpace(string(output))
 		if message == "" {
@@ -492,4 +693,51 @@ func runGit(path string, args ...string) (string, error) {
 		return "", fmt.Errorf("%s", message)
 	}
 	return string(output), nil
+}
+
+func recordGitCommand(args []string, output []byte, commandErr error, success bool, startedAt time.Time, duration time.Duration) {
+	gitCommandLogMu.RLock()
+	sink := gitCommandLogSink
+	gitCommandLogMu.RUnlock()
+	if sink == nil {
+		return
+	}
+
+	errorMessage := ""
+	if commandErr != nil {
+		errorMessage = strings.TrimSpace(formatGitOutput(output))
+		if errorMessage == "" {
+			errorMessage = commandErr.Error()
+		}
+	}
+
+	sink(GitCommandLog{
+		Command:   formatGitCommand(args),
+		Output:    formatGitOutput(output),
+		Error:     errorMessage,
+		StartedAt: startedAt.Format(time.RFC3339Nano),
+		Duration:  duration.Milliseconds(),
+		Success:   success,
+	})
+}
+
+func formatGitCommand(args []string) string {
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, "git")
+	for _, arg := range args {
+		if arg == "" || strings.ContainsAny(arg, " \t\n\"") {
+			parts = append(parts, strconv.Quote(arg))
+			continue
+		}
+		parts = append(parts, arg)
+	}
+	return strings.Join(parts, " ")
+}
+
+func formatGitOutput(output []byte) string {
+	return strings.NewReplacer(
+		"\x00", "\n",
+		"\x1e", "\n",
+		"\x1f", "\t",
+	).Replace(string(output))
 }

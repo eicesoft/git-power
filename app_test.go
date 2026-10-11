@@ -26,7 +26,7 @@ func TestParseStatus(t *testing.T) {
 
 func TestRepositoryWorkflow(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init", "-q")
+	git(t, root, "init", "-q", "-b", "main")
 	git(t, root, "config", "user.name", "Test User")
 	git(t, root, "config", "user.email", "test@example.com")
 
@@ -81,7 +81,7 @@ func TestLoadRepositoryAheadCommits(t *testing.T) {
 	if err := os.MkdirAll(remote, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	git(t, root, "init", "-q")
+	git(t, root, "init", "-q", "-b", "main")
 	git(t, root, "config", "user.name", "Test User")
 	git(t, root, "config", "user.email", "test@example.com")
 	write(t, root, "first.txt", "one\n")
@@ -115,7 +115,7 @@ func TestLoadRepositoryAheadCommits(t *testing.T) {
 
 func TestGetCommitDetail(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init", "-q")
+	git(t, root, "init", "-q", "-b", "main")
 	git(t, root, "config", "user.name", "Test User")
 	git(t, root, "config", "user.email", "test@example.com")
 
@@ -148,7 +148,7 @@ func TestGetCommitDetail(t *testing.T) {
 
 func TestGetChangeDiff(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init", "-q")
+	git(t, root, "init", "-q", "-b", "main")
 	git(t, root, "config", "user.name", "Test User")
 	git(t, root, "config", "user.email", "test@example.com")
 	write(t, root, "first.txt", "one\n")
@@ -185,13 +185,44 @@ func TestParseCommitFilesRename(t *testing.T) {
 	}
 }
 
+func TestGitCommandLogs(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init", "-q", "-b", "main")
+	git(t, root, "config", "user.name", "Test User")
+	git(t, root, "config", "user.email", "test@example.com")
+	write(t, root, "first.txt", "one\n")
+	git(t, root, "add", "first.txt")
+	git(t, root, "commit", "-qm", "初始提交")
+
+	app := &App{}
+	setGitCommandLogSink(app.appendGitLog)
+	t.Cleanup(func() {
+		setGitCommandLogSink(nil)
+	})
+
+	if _, err := LoadRepository(root); err != nil {
+		t.Fatal(err)
+	}
+
+	logs := app.GetGitCommandLogs()
+	if len(logs) == 0 {
+		t.Fatal("expected Git command logs")
+	}
+	if !logs[0].Success || !strings.HasPrefix(logs[0].Command, "git -C ") {
+		t.Fatalf("unexpected Git command log: %+v", logs[0])
+	}
+	if cleared := app.ClearGitCommandLogs(); len(cleared) != 0 {
+		t.Fatalf("expected cleared Git command logs, got %+v", cleared)
+	}
+}
+
 func TestSwitchExistingRemoteTrackingBranch(t *testing.T) {
 	root := t.TempDir()
 	remote := filepath.Join(t.TempDir(), "remote.git")
 	if err := os.MkdirAll(remote, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	git(t, root, "init", "-q")
+	git(t, root, "init", "-q", "-b", "main")
 	git(t, root, "config", "user.name", "Test User")
 	git(t, root, "config", "user.email", "test@example.com")
 	write(t, root, "first.txt", "one\n")
@@ -217,6 +248,133 @@ func TestSwitchExistingRemoteTrackingBranch(t *testing.T) {
 	}
 }
 
+func TestDiscardChange(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init", "-q", "-b", "main")
+	git(t, root, "config", "user.name", "Test User")
+	git(t, root, "config", "user.email", "test@example.com")
+	write(t, root, "first.txt", "one\n")
+	write(t, root, "sub/second.txt", "one\n")
+	git(t, root, "add", ".")
+	git(t, root, "commit", "-qm", "初始提交")
+
+	app := &App{}
+
+	// 已修改文件恢复到 HEAD。
+	write(t, root, "first.txt", "two\n")
+	if _, err := app.DiscardChange(root, "first.txt", "", " M"); err != nil {
+		t.Fatal(err)
+	}
+	if content := strings.ReplaceAll(read(t, root, "first.txt"), "\r\n", "\n"); content != "one\n" {
+		t.Fatalf("expected restored content, got %q", content)
+	}
+
+	// 已暂存的新增文件同时从暂存区和工作区移除。
+	write(t, root, "added.txt", "new\n")
+	git(t, root, "add", "added.txt")
+	if _, err := app.DiscardChange(root, "added.txt", "", "A "); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "added.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected added.txt removed, got %v", err)
+	}
+
+	// 已暂存的删除文件被恢复。
+	git(t, root, "rm", "-q", "sub/second.txt")
+	if _, err := app.DiscardChange(root, "sub/second.txt", "", "D "); err != nil {
+		t.Fatal(err)
+	}
+	if content := strings.ReplaceAll(read(t, root, "sub/second.txt"), "\r\n", "\n"); content != "one\n" {
+		t.Fatalf("expected restored content, got %q", content)
+	}
+
+	// 未跟踪文件被删除。
+	write(t, root, "untracked.txt", "new\n")
+	if _, err := app.DiscardChange(root, "untracked.txt", "", "??"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "untracked.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected untracked.txt removed, got %v", err)
+	}
+
+	// 未跟踪目录被删除。
+	write(t, root, "newdir/inside.txt", "new\n")
+	if _, err := app.DiscardChange(root, "newdir/", "", "??"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "newdir")); !os.IsNotExist(err) {
+		t.Fatalf("expected newdir removed, got %v", err)
+	}
+
+	// 越界路径被拒绝。
+	if _, err := app.DiscardChange(root, "../outside.txt", "", " M"); err == nil {
+		t.Fatal("expected error for escaping path")
+	}
+}
+
+func TestIgnoreChange(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init", "-q", "-b", "main")
+	git(t, root, "config", "user.name", "Test User")
+	git(t, root, "config", "user.email", "test@example.com")
+	write(t, root, "first.txt", "one\n")
+	git(t, root, "add", "first.txt")
+	git(t, root, "commit", "-qm", "初始提交")
+	write(t, root, "log.txt", "new\n")
+	write(t, root, "cache/tmp.txt", "new\n")
+
+	app := &App{}
+	repo, err := app.IgnoreChange(root, "log.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ignored := map[string]bool{}
+	for _, change := range repo.Changes {
+		ignored[change.Path] = true
+	}
+	if ignored["log.txt"] || !ignored[".gitignore"] || !ignored["cache/"] {
+		t.Fatalf("expected log.txt ignored and .gitignore change reported, got %+v", repo.Changes)
+	}
+
+	repo, err = app.IgnoreChange(root, "cache/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.Changes) != 1 || repo.Changes[0].Path != ".gitignore" {
+		t.Fatalf("expected only .gitignore change remaining, got %+v", repo.Changes)
+	}
+
+	// 重复忽略不会写入重复行。
+	if _, err := app.IgnoreChange(root, "log.txt"); err != nil {
+		t.Fatal(err)
+	}
+	content := read(t, root, ".gitignore")
+	if strings.Count(content, "/log.txt") != 1 {
+		t.Fatalf("expected single ignore entry, got %q", content)
+	}
+}
+
+func TestChangeAbsPath(t *testing.T) {
+	root, err := filepath.Abs(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	abs, err := changeAbsPath(root, "sub/dir/file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := filepath.Join(root, "sub", "dir", "file.txt")
+	if abs != expected {
+		t.Fatalf("expected %q, got %q", expected, abs)
+	}
+	if _, err := changeAbsPath(root, "../escape.txt"); err == nil {
+		t.Fatal("expected error for escaping path")
+	}
+	if _, err := changeAbsPath(root, ""); err == nil {
+		t.Fatal("expected error for empty path")
+	}
+}
+
 func git(t *testing.T, path string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", path}, args...)...)
@@ -230,7 +388,19 @@ func git(t *testing.T, path string, args ...string) string {
 func write(t *testing.T, root, name, content string) {
 	t.Helper()
 	path := filepath.Join(root, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func read(t *testing.T, root, name string) string {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(root, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(content)
 }

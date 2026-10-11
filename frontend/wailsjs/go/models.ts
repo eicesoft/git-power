@@ -123,6 +123,30 @@ export namespace main {
 		}
 	}
 	
+	export class GitCommandLog {
+	    id: number;
+	    command: string;
+	    output: string;
+	    error: string;
+	    startedAt: string;
+	    duration: number;
+	    success: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new GitCommandLog(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.command = source["command"];
+	        this.output = source["output"];
+	        this.error = source["error"];
+	        this.startedAt = source["startedAt"];
+	        this.duration = source["duration"];
+	        this.success = source["success"];
+	    }
+	}
 	export class Repository {
 	    path: string;
 	    name: string;

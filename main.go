@@ -19,6 +19,7 @@ func main() {
 		Title:  "Git Power",
 		Width:  1440,
 		Height: 900,
+		Frameless: true,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

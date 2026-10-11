@@ -24,6 +24,8 @@ export function IgnoreChange(arg1:string,arg2:string):Promise<main.Repository>;
 
 export function OpenChange(arg1:string,arg2:string):Promise<void>;
 
+export function Pull(arg1:string,arg2:string,arg3:string,arg4:boolean,arg5:boolean):Promise<main.Repository>;
+
 export function RefreshRepository(arg1:string):Promise<main.Repository>;
 
 export function SelectRepository():Promise<main.Repository>;

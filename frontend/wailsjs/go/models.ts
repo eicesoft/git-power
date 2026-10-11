@@ -153,6 +153,7 @@ export namespace main {
 	    currentBranch: string;
 	    aheadCommits: number;
 	    detached: boolean;
+	    remotes: string[];
 	    branches: Branch[];
 	    commits: Commit[];
 	    changes: Change[];
@@ -168,6 +169,7 @@ export namespace main {
 	        this.currentBranch = source["currentBranch"];
 	        this.aheadCommits = source["aheadCommits"];
 	        this.detached = source["detached"];
+	        this.remotes = source["remotes"];
 	        this.branches = this.convertValues(source["branches"], Branch);
 	        this.commits = this.convertValues(source["commits"], Commit);
 	        this.changes = this.convertValues(source["changes"], Change);

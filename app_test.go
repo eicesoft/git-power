@@ -248,6 +248,70 @@ func TestSwitchExistingRemoteTrackingBranch(t *testing.T) {
 	}
 }
 
+func TestPull(t *testing.T) {
+	root := t.TempDir()
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	if err := os.MkdirAll(remote, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, root, "init", "-q", "-b", "main")
+	git(t, root, "config", "user.name", "Test User")
+	git(t, root, "config", "user.email", "test@example.com")
+	write(t, root, "first.txt", "one\n")
+	git(t, root, "add", "first.txt")
+	git(t, root, "commit", "-qm", "初始提交")
+	git(t, remote, "init", "-q", "--bare", "-b", "main")
+	git(t, root, "remote", "add", "origin", remote)
+	git(t, root, "push", "-qu", "origin", "HEAD:main")
+
+	clone := filepath.Join(t.TempDir(), "clone")
+	parent := filepath.Dir(clone)
+	git(t, parent, "clone", "-q", remote, clone)
+	git(t, clone, "config", "user.name", "Test User")
+	git(t, clone, "config", "user.email", "test@example.com")
+	write(t, clone, "remote.txt", "from remote\n")
+	git(t, clone, "add", "remote.txt")
+	git(t, clone, "commit", "-qm", "远程新增文件")
+	git(t, clone, "push", "-q", "origin", "HEAD:main")
+
+	app := &App{}
+
+	repo, err := LoadRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.Remotes) != 1 || repo.Remotes[0] != "origin" {
+		t.Fatalf("expected remotes [origin], got %v", repo.Remotes)
+	}
+
+	repo, err = app.Pull(repo.Path, "origin", "main", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "remote.txt")); err != nil {
+		t.Fatalf("expected remote.txt after pull: %v", err)
+	}
+
+	// 远程再次更新，同时本地保留未提交更改，验证暂存并恢复。
+	write(t, clone, "another.txt", "another\n")
+	git(t, clone, "add", "another.txt")
+	git(t, clone, "commit", "-qm", "远程再次新增")
+	git(t, clone, "push", "-q", "origin", "HEAD:main")
+	write(t, root, "local.txt", "local change\n")
+
+	repo, err = app.Pull(root, "origin", "main", false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "another.txt")); err != nil {
+		t.Fatalf("expected another.txt after pull: %v", err)
+	}
+	local, err := os.ReadFile(filepath.Join(root, "local.txt"))
+	if err != nil || strings.TrimSpace(string(local)) != "local change" {
+		t.Fatalf("expected local change preserved, got %q (err: %v)", string(local), err)
+	}
+}
+
 func TestDiscardChange(t *testing.T) {
 	root := t.TempDir()
 	git(t, root, "init", "-q", "-b", "main")

@@ -31,11 +31,27 @@ import {
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -59,6 +75,7 @@ import {
   GetCommitDetail,
   IgnoreChange,
   OpenChange,
+  Pull,
   RefreshRepository,
   GitAction,
   SelectRepository,
@@ -263,6 +280,11 @@ function App() {
   const [gitLogAnchor, setGitLogAnchor] = useState<{ x: number; y: number } | null>(null)
   const [expandedLogIds, setExpandedLogIds] = useState<Set<number>>(new Set())
   const [pendingDiscard, setPendingDiscard] = useState<Change | null>(null)
+  const [pullOpen, setPullOpen] = useState(false)
+  const [pullRemote, setPullRemote] = useState('')
+  const [pullBranch, setPullBranch] = useState('')
+  const [pullRebase, setPullRebase] = useState(false)
+  const [pullStash, setPullStash] = useState(true)
 
   const activeRepository = useMemo(
     () => repositories.find((repository) => repository.path === activePath) ?? null,
@@ -277,6 +299,7 @@ function App() {
     setChangeDiff('')
     setCommitDetail(null)
     setDetailTab('info')
+    setPullOpen(false)
   }, [activePath])
 
   useEffect(() => {
@@ -349,6 +372,39 @@ function App() {
   const runGitAction = (action: string) => {
     if (!activePath || busy) return
     runAction(() => GitAction(activePath, action))
+  }
+
+  const defaultPullBranch = (repository: Repository, remote: string) => {
+    const current = repository.branches.find((branch) => branch.current && !branch.remote)
+    if (current?.upstream?.startsWith(`${remote}/`)) {
+      return current.upstream.slice(remote.length + 1)
+    }
+    const first = repository.branches.find((branch) => branch.remote && branch.name.startsWith(`${remote}/`))
+    return first ? first.name.slice(remote.length + 1) : ''
+  }
+
+  const openPullDialog = () => {
+    if (!activeRepository || busy) return
+    if (activeRepository.remotes.length === 0) {
+      toastError('当前仓库没有配置远程仓库，无法 Pull', '无法 Pull')
+      return
+    }
+    const remote = activeRepository.remotes.includes('origin') ? 'origin' : activeRepository.remotes[0]
+    setPullRemote(remote)
+    setPullBranch(defaultPullBranch(activeRepository, remote))
+    setPullRebase(false)
+    setPullStash(true)
+    setPullOpen(true)
+  }
+
+  const pullFromRemote = () => {
+    if (!activePath || busy || !pullRemote || !pullBranch) return
+    const path = activePath
+    runAction(async () => {
+      const repository = await Pull(path, pullRemote, pullBranch, pullRebase, pullStash)
+      setPullOpen(false)
+      return repository
+    })
   }
 
   const createBranch = () => {
@@ -427,6 +483,9 @@ function App() {
 
   const localBranches = activeRepository?.branches.filter((branch) => !branch.remote) ?? []
   const remoteBranches = activeRepository?.branches.filter((branch) => branch.remote) ?? []
+  const pullRemoteBranches = (activeRepository?.branches ?? [])
+    .filter((branch) => branch.remote && branch.name.startsWith(`${pullRemote}/`))
+    .map((branch) => branch.name.slice(pullRemote.length + 1))
   const aheadCommits = activeRepository?.aheadCommits ?? 0
   const currentBranchHasUpstream = localBranches.some(
     (branch) => branch.current && branch.upstream,
@@ -702,7 +761,7 @@ function App() {
                     className={`h-11 ${
                       item.action === 'push' && currentBranchHasUpstream ? 'w-16' : 'w-10'
                     } flex-col gap-0.5 rounded-md px-1 text-[10px] text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent`}
-                    onClick={() => runGitAction(item.action)}
+                    onClick={() => (item.action === 'pull' ? openPullDialog() : runGitAction(item.action))}
                     disabled={busy}
                     title={
                       item.action === 'push' && currentBranchHasUpstream
@@ -1149,29 +1208,29 @@ function App() {
                           {detailLoading ? '读取提交信息...' : '暂无提交信息'}
                         </div>
                       ) : (
-                        <div className="max-w-3xl space-y-5 p-6">
-                          <div className="space-y-1">
-                            <div className="text-xs font-medium uppercase text-muted-foreground">Subject</div>
-                            <div className="text-base font-semibold">{commitDetail.subject}</div>
+                        <div className="max-w-3xl space-y-3 p-4">
+                          <div className="space-y-0.5">
+                            <div className="text-[11px] font-medium uppercase text-muted-foreground">Subject</div>
+                            <div className="text-sm font-semibold leading-5">{commitDetail.subject}</div>
                           </div>
-                          <div className="space-y-1">
-                            <div className="text-xs font-medium uppercase text-muted-foreground">Description</div>
-                            <div className="whitespace-pre-wrap text-sm leading-6">
+                          <div className="space-y-0.5">
+                            <div className="text-[11px] font-medium uppercase text-muted-foreground">Description</div>
+                            <div className="whitespace-pre-wrap text-xs leading-5">
                               {commitDetail.body || '无详细说明'}
                             </div>
                           </div>
-                          <div className="grid gap-4 text-sm sm:grid-cols-2">
-                            <div className="space-y-1">
-                              <div className="text-xs font-medium uppercase text-muted-foreground">Author</div>
+                          <div className="grid gap-2 text-xs sm:grid-cols-2">
+                            <div className="space-y-0.5">
+                              <div className="text-[11px] font-medium uppercase text-muted-foreground">Author</div>
                               <div>{commitDetail.author}</div>
                             </div>
-                            <div className="space-y-1">
-                              <div className="text-xs font-medium uppercase text-muted-foreground">Date</div>
+                            <div className="space-y-0.5">
+                              <div className="text-[11px] font-medium uppercase text-muted-foreground">Date</div>
                               <div>{formatDate(commitDetail.date)}</div>
                             </div>
-                            <div className="space-y-1 sm:col-span-2">
-                              <div className="text-xs font-medium uppercase text-muted-foreground">Hash</div>
-                              <div className="break-all font-mono text-xs">{commitDetail.hash}</div>
+                            <div className="space-y-0.5 sm:col-span-2">
+                              <div className="text-[11px] font-medium uppercase text-muted-foreground">Hash</div>
+                              <div className="break-all font-mono text-[11px]">{commitDetail.hash}</div>
                             </div>
                           </div>
                         </div>
@@ -1196,6 +1255,91 @@ function App() {
           </main>
           </div>
         </div>
+      )}
+
+      {activeRepository && (
+        <Dialog open={pullOpen} onOpenChange={setPullOpen}>
+          <DialogContent className="sm:max-w-md" showCloseButton={false}>
+            <DialogHeader>
+              <DialogTitle>Pull</DialogTitle>
+              <DialogDescription>
+                Pull remote changes and merges them into your local branch
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2.5">
+              <span className="text-right text-sm text-muted-foreground">Remote:</span>
+              <Select
+                value={pullRemote}
+                items={activeRepository.remotes.map((remote) => ({ value: remote, label: remote }))}
+                onValueChange={(value) => {
+                  const remote = String(value)
+                  setPullRemote(remote)
+                  setPullBranch(defaultPullBranch(activeRepository, remote))
+                }}
+              >
+                <SelectTrigger className="w-48">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {activeRepository.remotes.map((remote) => (
+                    <SelectItem key={remote} value={remote}>
+                      {remote}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <span className="text-right text-sm text-muted-foreground">Branch:</span>
+              <Select
+                value={pullBranch}
+                items={pullRemoteBranches.map((branch) => ({ value: branch, label: branch }))}
+                onValueChange={(value) => setPullBranch(String(value))}
+              >
+                <SelectTrigger className="w-48">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {pullRemoteBranches.map((branch) => (
+                    <SelectItem key={branch} value={branch}>
+                      {branch}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <span className="text-right text-sm text-muted-foreground">Into:</span>
+              <div className="flex min-w-0 items-center gap-1.5 text-sm">
+                <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate">{activeRepository.currentBranch || '未初始化分支'}</span>
+              </div>
+              <div className="col-start-2 flex flex-col gap-2.5">
+                <label className="flex cursor-pointer items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={pullRebase}
+                    onCheckedChange={(checked) => setPullRebase(checked === true)}
+                  />
+                  Rebase instead of merge
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={pullStash}
+                    onCheckedChange={(checked) => setPullStash(checked === true)}
+                  />
+                  Stash and reapply local changes
+                </label>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPullOpen(false)} disabled={busy}>
+                Cancel
+              </Button>
+              <Button
+                onClick={pullFromRemote}
+                disabled={busy || !pullRemote || !pullBranch || pullRemoteBranches.length === 0}
+              >
+                Pull
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
 
       <AlertDialog
@@ -1492,24 +1636,32 @@ function CommitRow({
     <button
       type="button"
       onClick={onSelect}
-      className={`flex w-full items-start gap-3 px-4 py-1 text-left text-xs transition-colors ${
+      className={`flex w-full items-start gap-2 px-4 py-0.5 text-left text-[11px] leading-5 transition-colors ${
         selected ? 'bg-[#0064E1] text-white' : 'hover:bg-muted/60'
       }`}
     >
-      <span className={`mt-0.5 w-16 shrink-0 font-mono ${selected ? 'text-white' : 'text-primary'}`}>
+      <span className={`w-14 shrink-0 font-mono ${selected ? 'text-white' : 'text-primary'}`}>
         {commit.shortHash}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-1.5">
             <Badge
               variant="secondary"
-              className={`max-w-32 truncate ${
+              className={`h-auto max-w-32 truncate px-1.5 py-0 text-[10px] leading-4 ${
                 selected ? 'border-transparent bg-white/20 !text-white' : ''
               }`}
             >
               {commit.author}
             </Badge>
+            {showDecorations && commit.decorations && (
+              <span
+                className={`shrink-0 truncate ${selected ? 'text-white' : 'text-muted-foreground'}`}
+                title={commit.decorations}
+              >
+                {commit.decorations}
+              </span>
+            )}
             <span className="truncate font-medium">{commit.subject}</span>
           </div>
           <Tooltip>
@@ -1526,11 +1678,6 @@ function CommitRow({
             <TooltipContent>{formatDate(commit.date)}</TooltipContent>
           </Tooltip>
         </div>
-        {showDecorations && commit.decorations && (
-          <div className={`mt-1 truncate ${selected ? 'text-white' : 'text-primary'}`}>
-            {commit.decorations}
-          </div>
-        )}
       </div>
     </button>
   )

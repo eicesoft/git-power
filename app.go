@@ -51,6 +51,7 @@ type Repository struct {
 	CurrentBranch string   `json:"currentBranch"`
 	AheadCommits  int      `json:"aheadCommits"`
 	Detached      bool     `json:"detached"`
+	Remotes       []string `json:"remotes"`
 	Branches      []Branch `json:"branches"`
 	Commits       []Commit `json:"commits"`
 	Changes       []Change `json:"changes"`
@@ -208,6 +209,7 @@ func LoadRepository(path string) (Repository, error) {
 	repo := Repository{
 		Path:     root,
 		Name:     filepath.Base(root),
+		Remotes:  []string{},
 		Branches: []Branch{},
 		Commits:  []Commit{},
 		Changes:  []Change{},
@@ -220,6 +222,10 @@ func LoadRepository(path string) (Repository, error) {
 		repo.CurrentBranch = strings.TrimSpace(head)
 	}
 
+	repo.Remotes, err = loadRemotes(root)
+	if err != nil {
+		return Repository{}, err
+	}
 	repo.Branches, err = loadBranches(root, repo.CurrentBranch)
 	if err != nil {
 		return Repository{}, err
@@ -322,6 +328,50 @@ func (a *App) GitAction(path, action string) (Repository, error) {
 	}
 	if _, err := runGit(path, args...); err != nil {
 		return Repository{}, fmt.Errorf("%s失败: %w", action, err)
+	}
+	return LoadRepository(path)
+}
+
+// Pull 拉取指定远程分支并合并或变基到当前分支，可选先暂存再恢复本地更改。
+func (a *App) Pull(path, remote, branch string, rebase, stash bool) (Repository, error) {
+	remote = strings.TrimSpace(remote)
+	branch = strings.TrimSpace(branch)
+	if remote == "" || branch == "" {
+		return Repository{}, fmt.Errorf("远程和分支不能为空")
+	}
+
+	stashed := false
+	if stash {
+		status, err := runGit(path, "status", "--porcelain")
+		if err != nil {
+			return Repository{}, fmt.Errorf("读取工作区状态失败: %w", err)
+		}
+		if strings.TrimSpace(status) != "" {
+			if _, err := runGit(path, "stash", "push", "--include-untracked"); err != nil {
+				return Repository{}, fmt.Errorf("暂存本地更改失败: %w", err)
+			}
+			stashed = true
+		}
+	}
+
+	pullArgs := []string{"pull"}
+	if rebase {
+		pullArgs = append(pullArgs, "--rebase")
+	}
+	pullArgs = append(pullArgs, remote, branch)
+	if _, err := runGit(path, pullArgs...); err != nil {
+		if stashed {
+			if _, popErr := runGit(path, "stash", "pop"); popErr != nil {
+				return Repository{}, fmt.Errorf("拉取失败且恢复暂存失败，请手动执行 git stash pop: %w", err)
+			}
+		}
+		return Repository{}, fmt.Errorf("拉取失败: %w", err)
+	}
+
+	if stashed {
+		if _, err := runGit(path, "stash", "pop"); err != nil {
+			return Repository{}, fmt.Errorf("拉取成功，但恢复暂存更改失败，请手动执行 git stash pop: %w", err)
+		}
 	}
 	return LoadRepository(path)
 }
@@ -496,6 +546,20 @@ func (a *App) GetCommitDetail(path, hash string) (CommitDetail, error) {
 		Body:      strings.TrimSpace(body),
 		Files:     parseCommitFiles(fileOutput),
 	}, nil
+}
+
+func loadRemotes(path string) ([]string, error) {
+	output, err := runGit(path, "remote")
+	if err != nil {
+		return nil, fmt.Errorf("读取远程仓库失败: %w", err)
+	}
+	remotes := []string{}
+	for _, line := range strings.Split(output, "\n") {
+		if name := strings.TrimSpace(line); name != "" {
+			remotes = append(remotes, name)
+		}
+	}
+	return remotes, nil
 }
 
 func loadBranches(path, current string) ([]Branch, error) {

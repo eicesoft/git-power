@@ -46,6 +46,10 @@ export function OpenChange(arg1, arg2) {
   return window['go']['main']['App']['OpenChange'](arg1, arg2);
 }
 
+export function Pull(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['Pull'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function RefreshRepository(arg1) {
   return window['go']['main']['App']['RefreshRepository'](arg1);
 }

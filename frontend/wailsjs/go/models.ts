@@ -49,6 +49,7 @@ export namespace main {
 	    date: string;
 	    subject: string;
 	    decorations: string;
+	    parents: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Commit(source);
@@ -62,6 +63,7 @@ export namespace main {
 	        this.date = source["date"];
 	        this.subject = source["subject"];
 	        this.decorations = source["decorations"];
+	        this.parents = source["parents"];
 	    }
 	}
 	export class CommitFile {

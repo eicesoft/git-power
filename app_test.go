@@ -24,6 +24,18 @@ func TestParseStatus(t *testing.T) {
 	}
 }
 
+func TestParseParents(t *testing.T) {
+	if got := parseParents("abc123 def456"); len(got) != 2 || got[0] != "abc123" || got[1] != "def456" {
+		t.Errorf("unexpected parents: %v", got)
+	}
+	if got := parseParents(""); len(got) != 0 {
+		t.Errorf("expected empty parents, got %v", got)
+	}
+	if got := parseParents("   "); len(got) != 0 {
+		t.Errorf("expected empty parents for blank input, got %v", got)
+	}
+}
+
 func TestRepositoryWorkflow(t *testing.T) {
 	root := t.TempDir()
 	git(t, root, "init", "-q", "-b", "main")

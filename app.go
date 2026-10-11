@@ -67,12 +67,13 @@ type Branch struct {
 }
 
 type Commit struct {
-	Hash        string `json:"hash"`
-	ShortHash   string `json:"shortHash"`
-	Author      string `json:"author"`
-	Date        string `json:"date"`
-	Subject     string `json:"subject"`
-	Decorations string `json:"decorations"`
+	Hash        string   `json:"hash"`
+	ShortHash   string   `json:"shortHash"`
+	Author      string   `json:"author"`
+	Date        string   `json:"date"`
+	Subject     string   `json:"subject"`
+	Decorations string   `json:"decorations"`
+	Parents     []string `json:"parents"`
 }
 
 type CommitFile struct {
@@ -630,7 +631,7 @@ func loadCommits(path string) ([]Commit, error) {
 		path,
 		"log",
 		"--max-count=500",
-		"--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%D%x1e",
+		"--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%D%x1f%P%x1e",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("读取提交历史失败: %w", err)
@@ -642,8 +643,8 @@ func loadCommits(path string) ([]Commit, error) {
 		if record == "" {
 			continue
 		}
-		fields := strings.SplitN(record, "\x1f", 6)
-		if len(fields) != 6 {
+		fields := strings.SplitN(record, "\x1f", 7)
+		if len(fields) != 7 {
 			continue
 		}
 		commits = append(commits, Commit{
@@ -653,12 +654,21 @@ func loadCommits(path string) ([]Commit, error) {
 			Date:        fields[3],
 			Subject:     fields[4],
 			Decorations: fields[5],
+			Parents:     parseParents(fields[6]),
 		})
 	}
 	if commits == nil {
 		commits = []Commit{}
 	}
 	return commits, nil
+}
+
+// parseParents 解析 %P 输出的空格分隔的父提交哈希列表。
+func parseParents(output string) []string {
+	if strings.TrimSpace(output) == "" {
+		return []string{}
+	}
+	return strings.Fields(output)
 }
 
 func loadChanges(path string) ([]Change, error) {

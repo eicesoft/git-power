@@ -502,6 +502,10 @@ function App() {
   const selectedCommit = activeRepository?.commits.find((commit) => commit.hash === selectedCommitHash)
     ?? activeRepository?.commits[0]
     ?? null
+  const commitGraph = useMemo(
+    () => buildCommitGraph(activeRepository?.commits ?? []),
+    [activeRepository?.commits],
+  )
 
   useEffect(() => {
     if (!activePath || workspaceView !== 'local' || !selectedChange) {
@@ -1176,6 +1180,8 @@ function App() {
                           <CommitRow
                             key={commit.hash}
                             commit={commit}
+                            graph={commitGraph.rows.get(commit.hash)}
+                            graphWidth={commitGraph.width}
                             selected={commit.hash === selectedCommit?.hash}
                             showDecorations={index > 0}
                             onSelect={() => setSelectedCommitHash(commit.hash)}
@@ -1621,13 +1627,137 @@ function CommitFileList({ files }: { files: CommitFileItem[] }) {
   )
 }
 
+const GRAPH_COLORS = ['#3b82f6', '#f59e0b', '#10b981', '#a855f7', '#ef4444', '#14b8a6', '#f97316', '#8b5cf6']
+const GRAPH_LANE_WIDTH = 12
+const GRAPH_ROW_HEIGHT = 24
+
+interface GraphLane {
+  hash: string
+  color: string
+}
+
+interface CommitGraphRow {
+  lane: number
+  color: string
+  before: GraphLane[]
+  after: GraphLane[]
+  parentLanes: number[]
+}
+
+// buildCommitGraph 按提交顺序为每条提交分配泳道：首个父提交继承当前泳道，
+// 其余父提交向右开辟新泳道；已存在于泳道中的父提交直接复用（合并线汇入）。
+function buildCommitGraph(commits: CommitItem[]) {
+  const rows = new Map<string, CommitGraphRow>()
+  let lanes: GraphLane[] = []
+  let colorCursor = 0
+  let maxLanes = 1
+  const nextColor = () => GRAPH_COLORS[colorCursor++ % GRAPH_COLORS.length]
+
+  for (const commit of commits) {
+    const parents = commit.parents ?? []
+    const before = lanes
+    const matchIndex = before.findIndex((item) => item.hash === commit.hash)
+
+    let lane: number
+    let color: string
+    let after: GraphLane[]
+    if (matchIndex >= 0) {
+      lane = matchIndex
+      color = before[matchIndex].color
+      after = before.filter((_, index) => index !== matchIndex)
+    } else {
+      lane = before.length
+      color = nextColor()
+      after = [...before]
+    }
+
+    const parentLanes: number[] = []
+    let extraInserted = 0
+    parents.forEach((parent, index) => {
+      const existing = after.findIndex((item) => item.hash === parent)
+      if (existing >= 0) {
+        parentLanes.push(existing)
+        return
+      }
+      const insertAt = index === 0 ? lane : lane + 1 + extraInserted
+      after.splice(insertAt, 0, { hash: parent, color: index === 0 ? color : nextColor() })
+      parentLanes.push(insertAt)
+      if (index > 0) extraInserted++
+    })
+
+    lanes = after
+    maxLanes = Math.max(maxLanes, after.length)
+    rows.set(commit.hash, { lane, color, before, after, parentLanes })
+  }
+
+  return { rows, width: Math.max(maxLanes, 1) * GRAPH_LANE_WIDTH }
+}
+
+function CommitGraphCell({ row, width }: { row: CommitGraphRow; width: number }) {
+  const height = GRAPH_ROW_HEIGHT
+  const mid = height / 2
+  const laneX = (index: number) => index * GRAPH_LANE_WIDTH + GRAPH_LANE_WIDTH / 2
+  const bezier = (x1: number, y1: number, x2: number, y2: number) =>
+    `M ${x1} ${y1} C ${x1} ${(y1 + y2) / 2} ${x2} ${(y1 + y2) / 2} ${x2} ${y2}`
+
+  const segments: { d: string; color: string }[] = []
+  row.before.forEach((item, index) => {
+    const x1 = laneX(index)
+    if (index === row.lane) {
+      segments.push({ d: `M ${x1} 0 L ${x1} ${mid}`, color: item.color })
+      return
+    }
+    const target = row.after.findIndex((lane) => lane.hash === item.hash)
+    const x2 = target >= 0 ? laneX(target) : x1
+    if (x2 === x1) {
+      segments.push({ d: `M ${x1} 0 L ${x1} ${height}`, color: item.color })
+    } else {
+      segments.push({ d: bezier(x1, 0, x2, height), color: item.color })
+    }
+  })
+  row.parentLanes.forEach((laneIndex) => {
+    const x1 = laneX(row.lane)
+    const x2 = laneX(laneIndex)
+    if (x2 === x1) {
+      segments.push({ d: `M ${x1} ${mid} L ${x1} ${height}`, color: row.color })
+    } else {
+      segments.push({ d: bezier(x1, mid, x2, height), color: row.color })
+    }
+  })
+
+  return (
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      className="shrink-0 overflow-visible"
+    >
+      {segments.map((segment, index) => (
+        <path key={index} d={segment.d} fill="none" stroke={segment.color} strokeWidth={1.5} />
+      ))}
+      <circle
+        cx={laneX(row.lane)}
+        cy={mid}
+        r={3}
+        fill={row.color}
+        stroke="var(--background)"
+        strokeWidth={1}
+      />
+    </svg>
+  )
+}
+
 function CommitRow({
   commit,
+  graph,
+  graphWidth,
   selected,
   showDecorations,
   onSelect,
 }: {
   commit: CommitItem
+  graph?: CommitGraphRow
+  graphWidth: number
   selected: boolean
   showDecorations: boolean
   onSelect: () => void
@@ -1636,19 +1766,24 @@ function CommitRow({
     <button
       type="button"
       onClick={onSelect}
-      className={`flex w-full items-start gap-2 px-4 py-0.5 text-left text-[11px] leading-5 transition-colors ${
+      className={`flex h-6 w-full items-center gap-2 px-4 text-left text-[11px] leading-5 transition-colors ${
         selected ? 'bg-[#0064E1] text-white' : 'hover:bg-muted/60'
       }`}
     >
+      {graph ? (
+        <CommitGraphCell row={graph} width={graphWidth} />
+      ) : (
+        <span className="shrink-0" style={{ width: graphWidth }} />
+      )}
       <span className={`w-14 shrink-0 font-mono ${selected ? 'text-white' : 'text-primary'}`}>
         {commit.shortHash}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-1.5">
             <Badge
               variant="secondary"
-              className={`h-auto max-w-32 truncate px-1.5 py-0 text-[10px] leading-4 ${
+              className={`h-auto max-w-32 shrink-0 truncate px-1.5 py-0 text-[10px] leading-4 ${
                 selected ? 'border-transparent bg-white/20 !text-white' : ''
               }`}
             >

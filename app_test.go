@@ -709,6 +709,40 @@ func TestChangeAbsPath(t *testing.T) {
 	}
 }
 
+// Dashboard 单击项目要展示 README，仓库没有 README 时返回空文件名。
+func TestGetProjectReadme(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init", "-q", "-b", "main")
+	app := &App{}
+
+	readme, err := app.GetProjectReadme(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readme.Name != "" || readme.Content != "" {
+		t.Fatalf("expected empty readme, got %+v", readme)
+	}
+
+	write(t, root, "README", "纯文本说明\n")
+	readme, err = app.GetProjectReadme(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readme.Name != "README" || readme.Content != "纯文本说明\n" {
+		t.Fatalf("unexpected readme: %+v", readme)
+	}
+
+	// README.md 与 README 同时存在时优先 README.md，文件名大小写不影响识别。
+	write(t, root, "readme.md", "# 标题\n")
+	readme, err = app.GetProjectReadme(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readme.Name != "readme.md" || readme.Content != "# 标题\n" {
+		t.Fatalf("expected readme.md to win, got %+v", readme)
+	}
+}
+
 func TestProjectStore(t *testing.T) {
 	store, err := NewProjectStore(filepath.Join(t.TempDir(), "projects.db"))
 	if err != nil {

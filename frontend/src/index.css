@@ -155,3 +155,77 @@
         display: block;
     }
 }
+
+/* Dashboard 预览仓库 README 的 Markdown 排版 */
+.markdown-body {
+    @apply text-sm leading-relaxed text-foreground;
+
+    > :first-child {
+        @apply mt-0;
+    }
+    > :last-child {
+        @apply mb-0;
+    }
+    h1 {
+        @apply mt-6 mb-3 border-b pb-2 text-xl font-semibold;
+    }
+    h2 {
+        @apply mt-6 mb-3 border-b pb-2 text-lg font-semibold;
+    }
+    h3 {
+        @apply mt-5 mb-2 text-base font-semibold;
+    }
+    h4,
+    h5,
+    h6 {
+        @apply mt-4 mb-2 text-sm font-semibold;
+    }
+    p {
+        @apply my-3;
+    }
+    a {
+        @apply text-primary underline underline-offset-2;
+    }
+    ul {
+        @apply my-3 list-disc pl-6;
+    }
+    ol {
+        @apply my-3 list-decimal pl-6;
+    }
+    li > ul,
+    li > ol {
+        @apply my-0;
+    }
+    blockquote {
+        @apply my-3 border-l-2 pl-3 text-muted-foreground;
+    }
+    code {
+        @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.85em];
+    }
+    pre {
+        @apply my-3 overflow-x-auto rounded-lg border bg-muted p-3;
+
+        code {
+            @apply bg-transparent p-0 text-xs;
+        }
+    }
+    table {
+        @apply my-3 w-full border-collapse text-sm;
+    }
+    th,
+    td {
+        @apply border px-2 py-1 text-left;
+    }
+    th {
+        @apply bg-muted font-medium;
+    }
+    img {
+        @apply my-3 max-w-full rounded;
+    }
+    hr {
+        @apply my-4 border-t;
+    }
+    input[type='checkbox'] {
+        @apply mr-1 align-middle;
+    }
+}

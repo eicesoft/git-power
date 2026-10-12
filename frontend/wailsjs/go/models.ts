@@ -251,6 +251,20 @@ export namespace main {
 	    }
 	}
 	
+	export class ProjectReadme {
+	    name: string;
+	    content: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProjectReadme(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.content = source["content"];
+	    }
+	}
 	export class ProjectSummary {
 	    path: string;
 	    name: string;

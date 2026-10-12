@@ -50,6 +50,10 @@ export function GetGitInfo() {
   return window['go']['main']['App']['GetGitInfo']();
 }
 
+export function GetProjectReadme(arg1) {
+  return window['go']['main']['App']['GetProjectReadme'](arg1);
+}
+
 export function GetProjectSummary(arg1) {
   return window['go']['main']['App']['GetProjectSummary'](arg1);
 }

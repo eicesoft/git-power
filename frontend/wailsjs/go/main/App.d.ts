@@ -26,6 +26,8 @@ export function GetGitGlobalConfig():Promise<Array<main.GitConfigEntry>>;
 
 export function GetGitInfo():Promise<main.GitInfo>;
 
+export function GetProjectReadme(arg1:string):Promise<main.ProjectReadme>;
+
 export function GetProjectSummary(arg1:string):Promise<main.ProjectSummary>;
 
 export function GetSettings():Promise<main.Settings>;

@@ -80,6 +80,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Toaster, toastError, toastSuccess } from '@/components/ui/toast'
 import { DiffViewer } from '@/components/diff-viewer'
+import { MarkdownView } from '@/components/markdown-view'
 import { SettingsDialog } from '@/components/settings-dialog'
 import { errorMessage } from '@/lib/utils'
 import { Environment, ClipboardSetText } from '../wailsjs/runtime/runtime'
@@ -95,6 +96,7 @@ import {
   GetChangeDiff,
   GetCommitDetail,
   GetGitInfo,
+  GetProjectReadme,
   GetProjectSummary,
   GetSettings,
   IgnoreChange,
@@ -130,6 +132,7 @@ type GitCommandLogItem = Awaited<ReturnType<typeof GetGitCommandLogs>>[number]
 type ProjectInfoItem = Awaited<ReturnType<typeof ListRecentProjects>>[number]
 type FolderItem = Awaited<ReturnType<typeof ListDashboardRepositories>>['folders'][number]
 type ProjectSummaryItem = Awaited<ReturnType<typeof GetProjectSummary>>
+type ProjectReadmeItem = Awaited<ReturnType<typeof GetProjectReadme>>
 type Settings = Awaited<ReturnType<typeof GetSettings>>
 type GitInfoItem = Awaited<ReturnType<typeof GetGitInfo>>
 
@@ -160,6 +163,23 @@ function startPaneDrag(
 }
 
 const noDragStyle = { '--wails-draggable': 'no-drag' } as CSSProperties
+
+// 已打开的仓库 tab 记在 localStorage，重启应用后按原顺序重新载入。
+const openTabsKey = 'git-power.open-tabs'
+
+function readOpenTabs(): { paths: string[]; active: string | null } {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(openTabsKey) ?? '')
+    return {
+      paths: Array.isArray(parsed.paths)
+        ? parsed.paths.filter((path: unknown): path is string => typeof path === 'string')
+        : [],
+      active: typeof parsed.active === 'string' ? parsed.active : null,
+    }
+  } catch {
+    return { paths: [], active: null }
+  }
+}
 
 const toolbarActions = [
   { action: 'fetch', label: 'Fetch', icon: Download },
@@ -301,6 +321,40 @@ function App() {
     () => repositories.find((repository) => repository.path === activePath) ?? null,
     [activePath, repositories],
   )
+
+  const [tabsRestored, setTabsRestored] = useState(false)
+
+  useEffect(() => {
+    const saved = readOpenTabs()
+    if (saved.paths.length === 0) {
+      setTabsRestored(true)
+      return
+    }
+    let cancelled = false
+    // 读取失败的仓库（已删除或不再是仓库）直接跳过，其记录会在恢复后的写入中被清掉。
+    Promise.all(saved.paths.map((path) => RefreshRepository(path).catch(() => null)))
+      .then((results) => {
+        if (cancelled) return
+        const restored = results.filter((repository): repository is Repository => repository !== null)
+        setRepositories(restored)
+        setActivePath(restored.find((repository) => repository.path === saved.active)?.path ?? null)
+      })
+      .finally(() => {
+        if (!cancelled) setTabsRestored(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    // 恢复完成前不写入，否则初始的空列表会覆盖上次保存的 tab。
+    if (!tabsRestored) return
+    localStorage.setItem(
+      openTabsKey,
+      JSON.stringify({ paths: repositories.map((repository) => repository.path), active: activePath }),
+    )
+  }, [tabsRestored, repositories, activePath])
 
   useEffect(() => {
     setCreatingBranch(false)
@@ -1976,6 +2030,8 @@ function Dashboard({
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [summary, setSummary] = useState<ProjectSummaryItem | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
+  const [readme, setReadme] = useState<ProjectReadmeItem | null>(null)
+  const [readmeLoading, setReadmeLoading] = useState(false)
   const [sideWidth, setSideWidth] = useState(224)
   const [renaming, setRenaming] = useState<{ id: number; value: string } | null>(null)
   const [deletingFolder, setDeletingFolder] = useState<FolderItem | null>(null)
@@ -2062,6 +2118,7 @@ function Dashboard({
   const selectProject = (path: string) => {
     setSelectedPath(path)
     setSummaryLoading(true)
+    setReadmeLoading(true)
     GetProjectSummary(path)
       .then(setSummary)
       .catch((summaryError) => {
@@ -2069,6 +2126,11 @@ function Dashboard({
         toastError(errorMessage(summaryError))
       })
       .finally(() => setSummaryLoading(false))
+    // README 缺失或读取失败都不打断预览，只在下方提示未找到。
+    GetProjectReadme(path)
+      .then(setReadme)
+      .catch(() => setReadme(null))
+      .finally(() => setReadmeLoading(false))
   }
 
   const projectItemClass = (path: string, extra = '') =>
@@ -2286,55 +2348,75 @@ function Dashboard({
         onMouseDown={startSideDrag}
       />
 
-      <main className="flex min-w-0 flex-1 flex-col items-center justify-center gap-4 text-muted-foreground">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-4 text-muted-foreground">
         {summaryLoading ? (
           <div className="text-sm">读取仓库信息...</div>
         ) : summary ? (
-          <div className="w-full max-w-xl space-y-4 p-8">
-            <div className="flex items-center gap-3">
-              <FolderGit2 className="size-8 shrink-0 text-primary" />
-              <div className="min-w-0">
-                <div className="truncate text-lg font-semibold text-foreground">{summary.name}</div>
-                <div className="truncate font-mono text-xs" title={summary.path}>{summary.path}</div>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-              <SummaryRow label="当前分支" value={summary.detached ? `分离 HEAD (${summary.currentBranch})` : summary.currentBranch || '无'} />
-              <SummaryRow label="远程仓库" value={summary.remotes.join(', ') || '无'} />
-              <SummaryRow label="分支" value={`本地 ${summary.localBranches} · 远程 ${summary.remoteBranches}`} />
-              <SummaryRow label="提交数" value={String(summary.commits)} />
-              <SummaryRow label="未提交更改" value={String(summary.changes)} />
-              <SummaryRow label="未推送提交" value={String(summary.aheadCommits)} />
-            </div>
-            {summary.lastCommit && (
-              <div className="space-y-1 rounded-lg border p-3">
-                <div className="text-[11px] font-medium uppercase text-muted-foreground">最近一次提交</div>
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="shrink-0 font-mono text-primary">{summary.lastCommit.shortHash}</span>
-                  <Badge variant="secondary" className="h-auto shrink-0 px-1.5 py-0 text-[10px] leading-4">
-                    {summary.lastCommit.author}
-                  </Badge>
-                  <span className="min-w-0 flex-1 truncate font-medium text-foreground">
-                    {summary.lastCommit.subject}
-                  </span>
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={(props) => (
-                        <span {...props} className="shrink-0 text-xs" />
-                      )}
-                    >
-                      {formatRelativeTime(summary.lastCommit.date)}
-                    </TooltipTrigger>
-                    <TooltipContent>{formatDate(summary.lastCommit.date)}</TooltipContent>
-                  </Tooltip>
+          <div className="flex min-h-0 w-full max-w-3xl flex-1 flex-col px-8">
+            <div className="shrink-0 space-y-4 pb-6 pt-8">
+              <div className="flex items-center gap-3">
+                <FolderGit2 className="size-8 shrink-0 text-primary" />
+                <div className="min-w-0">
+                  <div className="truncate text-lg font-semibold text-foreground">{summary.name}</div>
+                  <div className="truncate font-mono text-xs" title={summary.path}>{summary.path}</div>
                 </div>
               </div>
-            )}
-            <div className="flex justify-end">
-              <Button onClick={() => onOpenProject(summary.path)} disabled={busy}>
-                <FolderGit2 />
-                打开仓库
-              </Button>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                <SummaryRow label="当前分支" value={summary.detached ? `分离 HEAD (${summary.currentBranch})` : summary.currentBranch || '无'} />
+                <SummaryRow label="远程仓库" value={summary.remotes.join(', ') || '无'} />
+                <SummaryRow label="分支" value={`本地 ${summary.localBranches} · 远程 ${summary.remoteBranches}`} />
+                <SummaryRow label="提交数" value={String(summary.commits)} />
+                <SummaryRow label="未提交更改" value={String(summary.changes)} />
+                <SummaryRow label="未推送提交" value={String(summary.aheadCommits)} />
+              </div>
+              {summary.lastCommit && (
+                <div className="space-y-1 rounded-lg border p-3">
+                  <div className="text-[11px] font-medium uppercase text-muted-foreground">最近一次提交</div>
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="shrink-0 font-mono text-primary">{summary.lastCommit.shortHash}</span>
+                    <Badge variant="secondary" className="h-auto shrink-0 px-1.5 py-0 text-[10px] leading-4">
+                      {summary.lastCommit.author}
+                    </Badge>
+                    <span className="min-w-0 flex-1 truncate font-medium text-foreground">
+                      {summary.lastCommit.subject}
+                    </span>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={(props) => (
+                          <span {...props} className="shrink-0 text-xs" />
+                        )}
+                      >
+                        {formatRelativeTime(summary.lastCommit.date)}
+                      </TooltipTrigger>
+                      <TooltipContent>{formatDate(summary.lastCommit.date)}</TooltipContent>
+                    </Tooltip>
+                  </div>
+                </div>
+              )}
+              <div className="flex justify-end">
+                <Button onClick={() => onOpenProject(summary.path)} disabled={busy}>
+                  <FolderGit2 />
+                  打开仓库
+                </Button>
+              </div>
+            </div>
+            {/* README 单独滚动：窗口再小，仓库概要也始终留在视野里。 */}
+            <div className="flex min-h-0 flex-1 flex-col border-t pt-4">
+              {readmeLoading ? (
+                <div className="pb-8 text-sm">读取 README...</div>
+              ) : readme?.name ? (
+                <>
+                  <div className="flex shrink-0 items-center gap-1.5 pb-3 text-[11px] font-medium uppercase text-muted-foreground">
+                    <FileText className="size-3.5" />
+                    {readme.name}
+                  </div>
+                  <div className="scroll-on-hover min-h-0 flex-1 overflow-y-auto pb-8">
+                    <MarkdownView content={readme.content} />
+                  </div>
+                </>
+              ) : (
+                <div className="pb-8 text-sm">仓库根目录没有 README 文件</div>
+              )}
             </div>
           </div>
         ) : (
@@ -2342,7 +2424,7 @@ function Dashboard({
             <FolderGit2 className="size-10 text-primary" />
             <div className="text-center">
               <p className="font-medium text-foreground">打开一个 Git 仓库</p>
-              <p className="mt-1 text-sm">单击左侧项目查看仓库信息，双击打开仓库，或选择本机上的 Git 仓库目录</p>
+              <p className="mt-1 text-sm">单击左侧项目查看仓库信息与 README，双击打开仓库，或选择本机上的 Git 仓库目录</p>
             </div>
             <Button onClick={onOpen} disabled={busy}>
               <FolderGit2 />

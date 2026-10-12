@@ -372,6 +372,58 @@ type ProjectSummary struct {
 	LastCommit     *Commit  `json:"lastCommit"`
 }
 
+// readmeRanks 决定仓库根目录下多个 README 同时存在时的优先级，数字越小越优先。
+var readmeRanks = map[string]int{".md": 0, ".markdown": 1, "": 2, ".txt": 3}
+
+// ProjectReadme 是仓库根目录 README 的内容，供 Dashboard 单击项目时渲染。
+// 仓库没有 README 时 Name 与 Content 均为空。
+type ProjectReadme struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+// GetProjectReadme 读取仓库根目录的 README 文件，文件名不区分大小写。
+func (a *App) GetProjectReadme(path string) (ProjectReadme, error) {
+	if strings.TrimSpace(path) == "" {
+		return ProjectReadme{}, fmt.Errorf("仓库路径不能为空")
+	}
+
+	root, err := runGit(path, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return ProjectReadme{}, fmt.Errorf("所选目录不是 Git 仓库: %w", err)
+	}
+	root = strings.TrimSpace(root)
+
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return ProjectReadme{}, fmt.Errorf("读取仓库目录失败: %w", err)
+	}
+	name, rank := "", len(readmeRanks)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		ext := filepath.Ext(entry.Name())
+		if !strings.EqualFold(strings.TrimSuffix(entry.Name(), ext), "readme") {
+			continue
+		}
+		entryRank, ok := readmeRanks[strings.ToLower(ext)]
+		if !ok || entryRank >= rank {
+			continue
+		}
+		name, rank = entry.Name(), entryRank
+	}
+	if name == "" {
+		return ProjectReadme{}, nil
+	}
+
+	content, err := os.ReadFile(filepath.Join(root, name))
+	if err != nil {
+		return ProjectReadme{}, fmt.Errorf("读取 %s 失败: %w", name, err)
+	}
+	return ProjectReadme{Name: name, Content: string(content)}, nil
+}
+
 // GetProjectSummary 读取仓库概要信息，供 Dashboard 单击预览，不加载完整提交历史与文件更改。
 func (a *App) GetProjectSummary(path string) (ProjectSummary, error) {
 	if strings.TrimSpace(path) == "" {

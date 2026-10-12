@@ -5,3 +5,4 @@ frontend/dist
 git-power
 /.agents
 /.claude
+/.codegraph

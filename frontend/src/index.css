@@ -128,6 +128,20 @@
     }
 }
 
+/* 后台执行 Pull/Push 时，贴在仓库信息框底部的进度条 */
+.remote-progress {
+    animation: remote-progress 1s ease-in-out infinite;
+}
+
+@keyframes remote-progress {
+    from {
+        transform: translateX(-100%);
+    }
+    to {
+        transform: translateX(400%);
+    }
+}
+
 /* 原生滚动条默认隐藏，悬停滚动区域时显示 */
 .scroll-on-hover {
     scrollbar-width: none;

@@ -265,6 +265,8 @@ function App() {
   const [creatingBranch, setCreatingBranch] = useState(false)
   const [busy, setBusy] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  // Pull/Push 弹窗关闭后仍在后台执行，用它驱动仓库信息框底部的进度条。
+  const [remoteBusy, setRemoteBusy] = useState(false)
   // Repositories 目录树的展开状态由 App 持有：Dashboard 切换到仓库视图时会卸载，
   // 这样切回来仍保留原来的展开情况，且初始为空即默认全部折叠。
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set())
@@ -507,11 +509,11 @@ function App() {
   const pullFromRemote = () => {
     if (!activePath || busy || !pullRemote || !pullBranch) return
     const path = activePath
-    runAction(async () => {
-      const repository = await Pull(path, pullRemote, pullBranch, pullRebase, pullStash)
-      setPullOpen(false)
-      return repository
-    })
+    setPullOpen(false)
+    setRemoteBusy(true)
+    runAction(() => Pull(path, pullRemote, pullBranch, pullRebase, pullStash)).finally(() =>
+      setRemoteBusy(false),
+    )
   }
 
   const openPushDialog = () => {
@@ -541,11 +543,11 @@ function App() {
     if (!remote) return
     const target = pushTarget.slice(remote.length + 1)
     const path = activePath
-    runAction(async () => {
-      const repository = await Push(path, remote, pushBranch, target, pushTracking, pushTags, pushForce)
-      setPushOpen(false)
-      return repository
-    })
+    setPushOpen(false)
+    setRemoteBusy(true)
+    runAction(() => Push(path, remote, pushBranch, target, pushTracking, pushTags, pushForce)).finally(
+      () => setRemoteBusy(false),
+    )
   }
 
   const createBranch = (checkout: boolean) => {
@@ -1088,6 +1090,11 @@ function App() {
               className="relative mx-2 flex h-12 min-w-64 max-w-xs flex-1 items-center gap-1 rounded-md bg-[#F5F5F5] px-2 dark:bg-[#262626]"
               title={activeRepository.path}
             >
+              {remoteBusy && (
+                <div className="absolute inset-x-0 bottom-0 h-[2px] overflow-hidden rounded-b-md">
+                  <div className="h-full w-1/4 bg-primary remote-progress" />
+                </div>
+              )}
               <Popover.Root
                 open={gitLogOpen}
                 onOpenChange={(open) => {

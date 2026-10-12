@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Menu } from '@base-ui/react/menu'
 import { Popover } from '@base-ui/react/popover'
@@ -23,10 +23,13 @@ import {
   Download,
   Upload,
   Minus,
+  Pencil,
   Plus,
   RefreshCw,
   RotateCcw,
+  Settings,
   Terminal,
+  Trash2,
   X,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -63,25 +66,36 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Toaster, toastError } from '@/components/ui/toast'
+import { DiffViewer } from '@/components/diff-viewer'
+import { SettingsDialog } from '@/components/settings-dialog'
+import { errorMessage } from '@/lib/utils'
 import { Environment, ClipboardSetText } from '../wailsjs/runtime/runtime'
 import {
+  AddDashboardFolder,
   ClearGitCommandLogs,
   Commit,
   CreateBranch,
+  DeleteDashboardFolder,
   DiscardChange,
   GetChangePath,
   GetGitCommandLogs,
   GetChangeDiff,
   GetCommitDetail,
+  GetGitInfo,
+  GetProjectSummary,
+  GetSettings,
   IgnoreChange,
   ListDashboardRepositories,
   ListRecentProjects,
+  MoveDashboardProject,
   OpenChange,
   Pull,
   Push,
   RecordProject,
   RefreshRepository,
   GitAction,
+  RenameDashboardFolder,
+  SaveSettings,
   SelectRepository,
   StageChange,
   SwitchBranch,
@@ -100,12 +114,37 @@ type CommitFileItem = CommitDetailItem['files'][number]
 type Change = Repository['changes'][number]
 type GitCommandLogItem = Awaited<ReturnType<typeof GetGitCommandLogs>>[number]
 type ProjectInfoItem = Awaited<ReturnType<typeof ListRecentProjects>>[number]
+type FolderItem = Awaited<ReturnType<typeof ListDashboardRepositories>>['folders'][number]
+type ProjectSummaryItem = Awaited<ReturnType<typeof GetProjectSummary>>
+type Settings = Awaited<ReturnType<typeof GetSettings>>
+type GitInfoItem = Awaited<ReturnType<typeof GetGitInfo>>
 
 type ChangeListItem =
   | { type: 'directory'; directory: string }
   | { type: 'change'; directory: string; change: Change }
 
 const windowDragStyle = { '--wails-draggable': 'drag' } as CSSProperties
+function startPaneDrag(
+  event: ReactMouseEvent<HTMLDivElement>,
+  onDrag: (delta: number, containerSize: number) => void,
+  axis: 'x' | 'y' = 'x',
+) {
+  event.preventDefault()
+  const startPos = axis === 'x' ? event.clientX : event.clientY
+  const rect = (event.currentTarget.parentElement as HTMLElement).getBoundingClientRect()
+  const containerSize = axis === 'x' ? rect.width : rect.height
+  const onMove = (move: MouseEvent) => {
+    const pos = axis === 'x' ? move.clientX : move.clientY
+    onDrag(pos - startPos, containerSize)
+  }
+  const onUp = () => {
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
+
 const noDragStyle = { '--wails-draggable': 'no-drag' } as CSSProperties
 
 const toolbarActions = [
@@ -133,10 +172,6 @@ const statusMarks: Record<string, { label: string; className: string }> = {
   U: { label: '!', className: 'bg-red-500 text-white' },
   '?': { label: '+', className: 'bg-green-500 text-white' },
   D: { label: '-', className: 'bg-red-500 text-white' },
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error)
 }
 
 function formatDate(value: string) {
@@ -169,100 +204,6 @@ function statusMark(status: string) {
   return statusMarks[status.trim()[0]]
 }
 
-type DiffLine = {
-  oldNumber: number | null
-  newNumber: number | null
-  kind: 'add' | 'remove' | 'context' | 'hunk' | 'meta'
-  text: string
-}
-
-function parseDiff(diff: string): DiffLine[] {
-  let oldNumber = 0
-  let newNumber = 0
-  const sourceLines = diff.split(/\r?\n/)
-  if (sourceLines.at(-1) === '') sourceLines.pop()
-
-  const visibleLines = sourceLines.filter(
-    (line) =>
-      !line.startsWith('diff ') &&
-      !line.startsWith('index ') &&
-      !line.startsWith('--- ') &&
-      !line.startsWith('+++ '),
-  )
-
-  return visibleLines.map((line) => {
-    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
-    if (hunk) {
-      oldNumber = Number(hunk[1])
-      newNumber = Number(hunk[2])
-      return { oldNumber: null, newNumber: null, kind: 'hunk', text: line }
-    }
-
-    if (
-      line.startsWith('new file') ||
-      line.startsWith('deleted file') ||
-      line.startsWith('rename ') ||
-      line.startsWith('similarity ') ||
-      line.startsWith('Binary ') ||
-      line.startsWith('\\')
-    ) {
-      return { oldNumber: null, newNumber: null, kind: 'meta', text: line }
-    }
-
-    if (line.startsWith('+')) {
-      return { oldNumber: null, newNumber: newNumber++, kind: 'add', text: line.slice(1) }
-    }
-    if (line.startsWith('-')) {
-      return { oldNumber: oldNumber++, newNumber: null, kind: 'remove', text: line.slice(1) }
-    }
-    if (line.startsWith(' ')) {
-      return { oldNumber: oldNumber++, newNumber: newNumber++, kind: 'context', text: line.slice(1) }
-    }
-
-    return { oldNumber: null, newNumber: null, kind: 'meta', text: line }
-  })
-}
-
-function DiffViewer({ diff }: { diff: string }) {
-  const lines = useMemo(() => parseDiff(diff), [diff])
-
-  return (
-    <div className="w-max min-w-full font-mono text-xs leading-5">
-      {lines.map((line, index) => (
-        <div
-          key={index}
-          className={`flex min-w-full ${
-            line.kind === 'add'
-              ? 'bg-green-500/15'
-              : line.kind === 'remove'
-                ? 'bg-red-500/15'
-                : line.kind === 'hunk'
-                  ? 'text-muted-foreground'
-                  : line.kind === 'meta'
-                    ? 'bg-muted/30 text-muted-foreground'
-                    : ''
-          }`}
-        >
-          <span className="w-12 shrink-0 select-none border-r px-2 text-right text-muted-foreground/60">
-            {line.oldNumber ?? ''}
-          </span>
-          <span className="w-12 shrink-0 select-none border-r px-2 text-right text-muted-foreground/60">
-            {line.newNumber ?? ''}
-          </span>
-          <span
-            className={`w-6 shrink-0 select-none text-center ${
-              line.kind === 'add' ? 'text-green-500' : line.kind === 'remove' ? 'text-red-500' : ''
-            }`}
-          >
-            {line.kind === 'add' ? '+' : line.kind === 'remove' ? '-' : ''}
-          </span>
-          <code className="whitespace-pre pr-4">{line.text}</code>
-        </div>
-      ))}
-    </div>
-  )
-}
-
 function App() {
   const [repositories, setRepositories] = useState<Repository[]>([])
   const [activePath, setActivePath] = useState<string | null>(null)
@@ -274,6 +215,36 @@ function App() {
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailTab, setDetailTab] = useState('info')
   const [commitSubjects, setCommitSubjects] = useState<Record<string, string>>({})
+  const [sidebarWidth, setSidebarWidth] = useState(256)
+  const [changesPaneRatio, setChangesPaneRatio] = useState(0.42)
+
+  const startSidebarDrag = (event: ReactMouseEvent<HTMLDivElement>) => {
+    startPaneDrag(event, (deltaX) => {
+      setSidebarWidth(Math.min(480, Math.max(160, Math.round(sidebarWidth + deltaX))))
+    })
+  }
+
+  const startChangesPaneDrag = (event: ReactMouseEvent<HTMLDivElement>) => {
+    startPaneDrag(event, (deltaX, containerWidth) => {
+      setChangesPaneRatio(Math.min(0.7, Math.max(0.2, changesPaneRatio + deltaX / containerWidth)))
+    })
+  }
+
+  const [diffPaneRatio, setDiffPaneRatio] = useState(0.55)
+
+  const startDiffPaneDrag = (event: ReactMouseEvent<HTMLDivElement>) => {
+    startPaneDrag(event, (deltaY, containerHeight) => {
+      setDiffPaneRatio(Math.min(0.8, Math.max(0.2, diffPaneRatio + deltaY / containerHeight)))
+    }, 'y')
+  }
+
+  const [commitsPaneRatio, setCommitsPaneRatio] = useState(0.5714)
+
+  const startCommitsPaneDrag = (event: ReactMouseEvent<HTMLDivElement>) => {
+    startPaneDrag(event, (deltaX, containerWidth) => {
+      setCommitsPaneRatio(Math.min(0.8, Math.max(0.2, commitsPaneRatio + deltaX / containerWidth)))
+    })
+  }
   const [commitDescriptions, setCommitDescriptions] = useState<Record<string, string>>({})
   const [branchName, setBranchName] = useState('')
   const [creatingBranch, setCreatingBranch] = useState(false)
@@ -297,7 +268,11 @@ function App() {
   const [pushTags, setPushTags] = useState(false)
   const [pushForce, setPushForce] = useState(false)
   const [recentProjects, setRecentProjects] = useState<ProjectInfoItem[]>([])
+  const [storedFolders, setStoredFolders] = useState<FolderItem[]>([])
   const [storedProjects, setStoredProjects] = useState<ProjectInfoItem[]>([])
+  const [settings, setSettings] = useState<Settings | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [gitInfo, setGitInfo] = useState<GitInfoItem | null>(null)
 
   const activeRepository = useMemo(
     () => repositories.find((repository) => repository.path === activePath) ?? null,
@@ -321,6 +296,35 @@ function App() {
       .catch(() => setPlatform(''))
   }, [])
 
+  const refreshGitInfo = () => {
+    GetGitInfo()
+      .then(setGitInfo)
+      .catch(() => setGitInfo(null))
+  }
+
+  useEffect(() => {
+    GetSettings()
+      .then(setSettings)
+      .catch((settingsError) => toastError(errorMessage(settingsError)))
+  }, [])
+
+  useEffect(() => {
+    // 首次挂载与打开设置页时都刷新，避免提示停留在未检测状态。
+    refreshGitInfo()
+  }, [settingsOpen])
+
+  // updateSettings 保存改动；Git 客户端路径保存成功后立即刷新可用性与版本信息。
+  const updateSettings = (patch: Partial<Settings>) => {
+    if (!settings) return
+    const next = { ...settings, ...patch }
+    setSettings(next)
+    SaveSettings(next)
+      .then(() => {
+        if ('gitPath' in patch) refreshGitInfo()
+      })
+      .catch((saveError) => toastError(errorMessage(saveError)))
+  }
+
   const refreshGitCommandLogs = () => {
     GetGitCommandLogs()
       .then(setGitCommandLogs)
@@ -332,17 +336,50 @@ function App() {
   }, [])
 
   const refreshStoredProjects = () => {
-    ListRecentProjects()
+    ListRecentProjects(settings?.recentLimit ?? 10)
       .then(setRecentProjects)
       .catch(() => {})
-    ListDashboardRepositories()
-      .then(setStoredProjects)
+    return ListDashboardRepositories()
+      .then((data) => {
+        setStoredFolders(data.folders)
+        setStoredProjects(data.projects)
+      })
       .catch(() => {})
   }
 
   useEffect(() => {
+    if (!settings) return
     refreshStoredProjects()
-  }, [])
+  }, [settings?.recentLimit])
+
+  const addDashboardFolder = async (parentId: number) => {
+    try {
+      const folder = await AddDashboardFolder('新建文件夹', parentId)
+      await refreshStoredProjects()
+      return folder
+    } catch (folderError) {
+      toastError(errorMessage(folderError))
+      return null
+    }
+  }
+
+  const renameDashboardFolder = (id: number, name: string) => {
+    RenameDashboardFolder(id, name)
+      .then(refreshStoredProjects)
+      .catch((folderError) => toastError(errorMessage(folderError)))
+  }
+
+  const deleteDashboardFolder = (id: number) => {
+    DeleteDashboardFolder(id)
+      .then(refreshStoredProjects)
+      .catch((folderError) => toastError(errorMessage(folderError)))
+  }
+
+  const moveDashboardProject = (path: string, folderId: number) => {
+    MoveDashboardProject(path, folderId)
+      .then(refreshStoredProjects)
+      .catch((moveError) => toastError(errorMessage(moveError)))
+  }
 
   const updateRepository = (repository: Repository) => {
     if (!repository.path) return
@@ -507,6 +544,16 @@ function App() {
     runAction(() => UnstageChange(activePath, `${directory}/`, ''))
   }
 
+  const stageAll = () => {
+    if (!activePath || busy) return
+    runAction(() => StageChange(activePath, '.', ''))
+  }
+
+  const unstageAll = () => {
+    if (!activePath || busy) return
+    runAction(() => UnstageChange(activePath, '.', ''))
+  }
+
   const openChange = (change: Change) => {
     if (!activePath) return
     OpenChange(activePath, change.path).catch((openError) => toastError(errorMessage(openError)))
@@ -524,11 +571,24 @@ function App() {
     runAction(() => IgnoreChange(activePath, change.path))
   }
 
+  const discard = (change: Change) => {
+    if (!activePath || busy) return
+    runAction(() => DiscardChange(activePath, change.path, change.originalPath, change.status))
+  }
+
+  const requestDiscard = (change: Change) => {
+    if (settings?.confirmDiscard === false) {
+      discard(change)
+      return
+    }
+    setPendingDiscard(change)
+  }
+
   const discardChange = () => {
-    if (!activePath || !pendingDiscard || busy) return
+    if (!pendingDiscard) return
     const change = pendingDiscard
     setPendingDiscard(null)
-    runAction(() => DiscardChange(activePath, change.path, change.originalPath, change.status))
+    discard(change)
   }
 
   const commitChanges = () => {
@@ -640,7 +700,7 @@ function App() {
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
       <header
-        className={`flex h-11 shrink-0 items-stretch gap-1 border-b bg-muted/40 ${platform === 'darwin' ? 'pl-28 pr-2' : 'pl-2 pr-2'}`}
+        className={`flex h-11 shrink-0 select-none items-stretch gap-1 border-b bg-muted/40 ${platform === 'darwin' ? 'pl-28 pr-2' : 'pl-2 pr-2'}`}
         style={windowDragStyle}
       >
         <Tabs
@@ -730,14 +790,20 @@ function App() {
         <Dashboard
           busy={busy}
           recentProjects={recentProjects}
+          folders={storedFolders}
           projects={storedProjects}
           onOpen={openRepository}
           onOpenProject={openStoredProject}
+          onAddFolder={addDashboardFolder}
+          onRenameFolder={renameDashboardFolder}
+          onDeleteFolder={deleteDashboardFolder}
+          onMoveProject={moveDashboardProject}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1">
-            <aside className="flex w-64 shrink-0 flex-col border-r">
+            <aside className="flex min-w-40 shrink-0 flex-col" style={{ width: sidebarWidth }}>
             <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
               <div className="flex items-center gap-2">
                 <GitBranch className="size-4 text-primary" />
@@ -806,6 +872,14 @@ function App() {
               </div>
             </ScrollArea>
           </aside>
+
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            className="relative w-px shrink-0 cursor-col-resize bg-border transition-colors before:absolute before:inset-y-0 before:-left-1 before:w-2 before:content-[''] hover:bg-primary/50 active:bg-primary"
+            style={noDragStyle}
+            onMouseDown={startSidebarDrag}
+          />
 
           <main className="flex min-w-0 flex-1 flex-col bg-muted/30">
           {activeRepository && (
@@ -994,12 +1068,12 @@ function App() {
                                   </span>
                                 </div>
                                 {log.output && expandedLogIds.has(log.id) && (
-                                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 font-mono text-[11px] text-muted-foreground">
+                                  <pre className="scroll-on-hover max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 font-mono text-[11px] text-muted-foreground">
                                     {log.output}
                                   </pre>
                                 )}
                                 {log.error && expandedLogIds.has(log.id) && (
-                                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-destructive/10 p-2 font-mono text-[11px] text-destructive">
+                                  <pre className="scroll-on-hover max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-destructive/10 p-2 font-mono text-[11px] text-destructive">
                                     {log.error}
                                   </pre>
                                 )}
@@ -1036,7 +1110,7 @@ function App() {
                 />
                 <Menu.Portal>
                   <Menu.Positioner align="center">
-                    <Menu.Popup className="max-h-72 min-w-72 overflow-auto rounded-lg border bg-popover p-1 shadow-lg">
+                    <Menu.Popup className="scroll-on-hover max-h-72 min-w-72 overflow-auto rounded-lg border bg-popover p-1 shadow-lg">
                       <div className="px-2 py-1 text-xs font-medium text-muted-foreground">
                         本地分支
                       </div>
@@ -1108,7 +1182,10 @@ function App() {
         )}
             {workspaceView === 'local' ? (
               <div className="flex min-h-0 flex-1">
-                <section className="flex w-[42%] min-w-64 max-w-[520px] shrink-0 flex-col border-r">
+                <section
+                  className="flex min-w-64 shrink-0 flex-col"
+                  style={{ width: `${changesPaneRatio * 100}%` }}
+                >
                   <div className="flex h-11 shrink-0 items-center justify-between border-b px-4">
                     <div className="flex items-center gap-2">
                       <FileText className="size-4 text-primary" />
@@ -1127,6 +1204,7 @@ function App() {
                           title="Unstaged"
                           changes={unstagedChanges}
                           staged={false}
+                          onStageAll={stageAll}
                           selectedKey={selectedChange?.key ?? ''}
                           busy={busy}
                           onSelect={(change) => setSelectedChangeKey(`unstaged:${change.path}`)}
@@ -1137,7 +1215,7 @@ function App() {
                           onOpen={openChange}
                           onCopyPath={copyChangePath}
                           onIgnore={ignoreChange}
-                          onDiscard={setPendingDiscard}
+                          onDiscard={requestDiscard}
                         />
                       </div>
                       <div className="flex min-h-0 flex-[3_1_0%] border-t">
@@ -1145,6 +1223,7 @@ function App() {
                           title="Staged"
                           changes={stagedChanges}
                           staged
+                          onUnstageAll={unstageAll}
                           selectedKey={selectedChange?.key ?? ''}
                           busy={busy}
                           onSelect={(change) => setSelectedChangeKey(`staged:${change.path}`)}
@@ -1155,12 +1234,20 @@ function App() {
                           onOpen={openChange}
                           onCopyPath={copyChangePath}
                           onIgnore={ignoreChange}
-                          onDiscard={setPendingDiscard}
+                          onDiscard={requestDiscard}
                         />
                       </div>
                     </div>
                   )}
                 </section>
+
+                <div
+                  role="separator"
+                  aria-orientation="vertical"
+                  className="relative w-px shrink-0 cursor-col-resize bg-border transition-colors before:absolute before:inset-y-0 before:-left-1 before:w-2 before:content-[''] hover:bg-primary/50 active:bg-primary"
+                  style={noDragStyle}
+                  onMouseDown={startChangesPaneDrag}
+                />
 
                 <section className="flex min-w-0 flex-1 flex-col">
                   <div className="flex h-11 shrink-0 items-center justify-between border-b px-4">
@@ -1176,19 +1263,34 @@ function App() {
                       </Badge>
                     )}
                   </div>
-                  <ScrollArea className="min-h-0 flex-[1.2]">
+                  <ScrollArea className="min-h-0" style={{ flex: `${diffPaneRatio} 1 0%` }}>
                     {!selectedChange ? (
                       <div className="p-6 text-center text-sm text-muted-foreground">选择文件查看更改</div>
                     ) : detailLoading ? (
                       <div className="p-6 text-center text-sm text-muted-foreground">读取更改...</div>
                     ) : changeDiff ? (
-                      <DiffViewer diff={changeDiff} />
+                      <DiffViewer
+                        diff={changeDiff}
+                        fontFamily={settings?.diffFontFamily}
+                        fontSize={settings?.diffFontSize}
+                      />
                     ) : (
                       <div className="p-6 text-center text-sm text-muted-foreground">无文本更改</div>
                     )}
                   </ScrollArea>
 
-                  <div className="flex min-h-0 flex-1 flex-col gap-3 border-t p-4">
+                  <div
+                    role="separator"
+                    aria-orientation="horizontal"
+                    className="relative h-px shrink-0 cursor-row-resize bg-border transition-colors before:absolute before:inset-x-0 before:-top-1 before:h-2 before:content-[''] hover:bg-primary/50 active:bg-primary"
+                    style={noDragStyle}
+                    onMouseDown={startDiffPaneDrag}
+                  />
+
+                  <div
+                    className="flex min-h-0 flex-col gap-3 p-4"
+                    style={{ flex: `${1 - diffPaneRatio} 1 0%` }}
+                  >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Check className="size-4 text-primary" />
@@ -1196,8 +1298,7 @@ function App() {
                       </div>
                       <span className="text-xs text-muted-foreground">{stagedChanges.length} 个暂存文件</span>
                     </div>
-                    <label className="space-y-1.5">
-                      <span className="text-xs font-medium text-muted-foreground">Commit Subject</span>
+                    <label className="block">
                       <Input
                         value={commitSubjects[activeRepository.path] ?? ''}
                         onChange={(event) =>
@@ -1206,12 +1307,11 @@ function App() {
                             [activeRepository.path]: event.target.value,
                           }))
                         }
-                        placeholder="简短描述本次提交"
+                        placeholder="Commit Subject"
                         disabled={busy}
                       />
                     </label>
-                    <label className="flex min-h-0 flex-1 flex-col space-y-1.5">
-                      <span className="text-xs font-medium text-muted-foreground">Description</span>
+                    <label className="flex min-h-0 flex-1 flex-col">
                       <textarea
                         className="min-h-20 flex-1 resize-none rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
                         value={commitDescriptions[activeRepository.path] ?? ''}
@@ -1221,7 +1321,7 @@ function App() {
                             [activeRepository.path]: event.target.value,
                           }))
                         }
-                        placeholder="可选的详细说明"
+                        placeholder="Description（可选）"
                         disabled={busy}
                       />
                     </label>
@@ -1242,7 +1342,10 @@ function App() {
               </div>
             ) : (
               <div className="flex min-h-0 flex-1">
-                <section className="flex w-[57.142857%] shrink-0 flex-col border-r">
+                <section
+                  className="flex min-w-64 shrink-0 flex-col"
+                  style={{ width: `${commitsPaneRatio * 100}%` }}
+                >
                   <div className="flex h-11 shrink-0 items-center justify-between border-b px-4">
                     <div className="flex items-center gap-2">
                       <History className="size-4 text-primary" />
@@ -1273,6 +1376,14 @@ function App() {
                     )}
                   </ScrollArea>
                 </section>
+
+                <div
+                  role="separator"
+                  aria-orientation="vertical"
+                  className="relative w-px shrink-0 cursor-col-resize bg-border transition-colors before:absolute before:inset-y-0 before:-left-1 before:w-2 before:content-[''] hover:bg-primary/50 active:bg-primary"
+                  style={noDragStyle}
+                  onMouseDown={startCommitsPaneDrag}
+                />
 
                 <Tabs
                   value={detailTab}
@@ -1518,6 +1629,16 @@ function App() {
         </>
       )}
 
+      {settings && (
+        <SettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          settings={settings}
+          gitInfo={gitInfo}
+          onChange={updateSettings}
+        />
+      )}
+
       <AlertDialog
         open={pendingDiscard !== null}
         onOpenChange={(open) => {
@@ -1544,69 +1665,193 @@ function App() {
 }
 
 type DashboardTreeNode = {
+  folderId: number | null
   name: string
-  path: string
   project: ProjectInfoItem | null
   children: DashboardTreeNode[]
 }
 
-// buildDashboardTree 按路径分段把仓库组织成目录树，路径分隔符兼容 / 与 \。
-function buildDashboardTree(projects: ProjectInfoItem[]): DashboardTreeNode[] {
-  const root: DashboardTreeNode = { name: '', path: '', project: null, children: [] }
-  for (const project of projects) {
-    const segments = project.path.split(/[\\/]/).filter(Boolean)
-    let parent = root
-    segments.forEach((segment, index) => {
-      const path = segments.slice(0, index + 1).join('/')
-      let node = parent.children.find((item) => item.path === path)
-      if (!node) {
-        node = { name: segment, path, project: null, children: [] }
-        parent.children.push(node)
-      }
-      if (index === segments.length - 1) node.project = project
-      parent = node
-    })
+// buildDashboardTree 按用户自定义目录组织仓库，未归入目录的仓库展示在根级。
+function buildDashboardTree(folders: FolderItem[], projects: ProjectInfoItem[]): DashboardTreeNode[] {
+  const folderNodes = new Map<number, DashboardTreeNode>()
+  for (const folder of folders) {
+    folderNodes.set(folder.id, { folderId: folder.id, name: folder.name, project: null, children: [] })
   }
-  return root.children
+  const tree: DashboardTreeNode[] = []
+  for (const folder of folders) {
+    const node = folderNodes.get(folder.id)!
+    const parent = folder.parentId ? folderNodes.get(folder.parentId) : undefined
+    if (parent) parent.children.push(node)
+    else tree.push(node)
+  }
+  for (const project of projects) {
+    const node: DashboardTreeNode = { folderId: null, name: project.name, project, children: [] }
+    const parent = project.folderId ? folderNodes.get(project.folderId) : undefined
+    if (parent) parent.children.push(node)
+    else tree.push(node)
+  }
+  return tree
 }
+
+const projectDragKey = 'application/x-gitpower-project'
 
 function Dashboard({
   busy,
   recentProjects,
+  folders,
   projects,
   onOpen,
   onOpenProject,
+  onAddFolder,
+  onRenameFolder,
+  onDeleteFolder,
+  onMoveProject,
+  onOpenSettings,
 }: {
   busy: boolean
   recentProjects: ProjectInfoItem[]
+  folders: FolderItem[]
   projects: ProjectInfoItem[]
   onOpen: () => void
   onOpenProject: (path: string) => void
+  onAddFolder: (parentId: number) => Promise<FolderItem | null>
+  onRenameFolder: (id: number, name: string) => void
+  onDeleteFolder: (id: number) => void
+  onMoveProject: (path: string, folderId: number) => void
+  onOpenSettings: () => void
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
-  const tree = useMemo(() => buildDashboardTree(projects), [projects])
+  const [selectedPath, setSelectedPath] = useState<string | null>(null)
+  const [summary, setSummary] = useState<ProjectSummaryItem | null>(null)
+  const [summaryLoading, setSummaryLoading] = useState(false)
+  const [sideWidth, setSideWidth] = useState(224)
+  const [renaming, setRenaming] = useState<{ id: number; value: string } | null>(null)
+  const [deletingFolder, setDeletingFolder] = useState<FolderItem | null>(null)
+  const [dropTarget, setDropTarget] = useState<number | 'root' | null>(null)
+  const tree = useMemo(() => buildDashboardTree(folders, projects), [folders, projects])
+  const renamingRef = useRef<HTMLInputElement>(null)
 
-  const toggle = (path: string) =>
+  useEffect(() => {
+    renamingRef.current?.focus()
+    renamingRef.current?.select()
+  }, [renaming?.id])
+
+  const folderKey = (id: number) => `folder:${id}`
+
+  // expandFolderChain 展开指定目录及其全部上层目录，保证新建或移入的目录可见。
+  const expandFolderChain = (folderId: number) => {
+    const parentById = new Map(folders.map((folder) => [folder.id, folder.parentId ?? 0]))
     setCollapsed((prev) => {
       const next = new Set(prev)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
+      let current = folderId
+      while (current) {
+        next.delete(folderKey(current))
+        current = parentById.get(current) ?? 0
+      }
+      return next
+    })
+  }
+
+  const startAddFolder = async (parentId: number) => {
+    const folder = await onAddFolder(parentId)
+    if (folder) {
+      expandFolderChain(parentId)
+      setRenaming({ id: folder.id, value: folder.name })
+    }
+  }
+
+  const commitRename = () => {
+    if (renaming) {
+      const name = renaming.value.trim()
+      const folder = folders.find((item) => item.id === renaming.id)
+      if (name && folder && name !== folder.name) onRenameFolder(renaming.id, name)
+    }
+    setRenaming(null)
+  }
+
+  const dropHandlers = (folderId: number | 'root') => ({
+    onDragOver: (event: ReactDragEvent) => {
+      if (event.dataTransfer.types.includes(projectDragKey)) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.dataTransfer.dropEffect = 'move'
+        setDropTarget(folderId)
+      }
+    },
+    onDragLeave: () => setDropTarget((current) => (current === folderId ? null : current)),
+    onDrop: (event: ReactDragEvent) => {
+      const path = event.dataTransfer.getData(projectDragKey)
+      if (!path) return
+      event.preventDefault()
+      event.stopPropagation()
+      setDropTarget(null)
+      if (folderId !== 'root') expandFolderChain(folderId)
+      onMoveProject(path, folderId === 'root' ? 0 : folderId)
+    },
+  })
+
+  const dropHighlight = (folderId: number | 'root') =>
+    dropTarget === folderId ? 'rounded-md bg-primary/10 outline-dashed outline-1 outline-primary' : ''
+
+  const startSideDrag = (event: ReactMouseEvent<HTMLDivElement>) => {
+    startPaneDrag(event, (deltaX) => {
+      setSideWidth(Math.min(480, Math.max(180, Math.round(sideWidth + deltaX))))
+    })
+  }
+
+  const toggle = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
       return next
     })
 
+  const selectProject = (path: string) => {
+    setSelectedPath(path)
+    setSummaryLoading(true)
+    GetProjectSummary(path)
+      .then(setSummary)
+      .catch((summaryError) => {
+        setSummary(null)
+        toastError(errorMessage(summaryError))
+      })
+      .finally(() => setSummaryLoading(false))
+  }
+
+  const projectItemClass = (path: string, extra = '') =>
+    `flex w-full items-center gap-2 rounded-md py-1.5 pr-2 text-left text-sm transition-colors disabled:opacity-50 ${
+      selectedPath === path
+        ? 'bg-primary/10 font-medium text-primary'
+        : 'text-foreground hover:bg-muted'
+    } ${extra}`
+
+  // rowIndent 目录行按层级缩进；仓库行额外让出展开箭头与间距的宽度，
+  // 使根级仓库与根级目录的图标对齐，目录内的仓库比所在目录再深一层。
+  const rowIndent = (depth: number, isFolder: boolean) => ({
+    paddingLeft: depth * 18 + 8 + (isFolder ? 0 : 18),
+  })
+
   const renderNodes = (nodes: DashboardTreeNode[], depth: number): ReactNode[] =>
     nodes.map((node) => {
-      const indent = { paddingLeft: depth * 12 + 8 }
-      if (node.project && node.children.length === 0) {
+      if (node.project) {
+        const project = node.project
         return (
           <button
-            key={node.path}
+            key={project.path}
             type="button"
             disabled={busy}
-            onClick={() => onOpenProject(node.project!.path)}
-            className="flex w-full items-center gap-2 rounded-md py-1.5 pr-2 text-left text-sm text-foreground transition-colors hover:bg-muted disabled:opacity-50"
-            style={indent}
-            title={node.project.path}
+            draggable
+            onDragStart={(event) => {
+              event.dataTransfer.setData(projectDragKey, project.path)
+              event.dataTransfer.effectAllowed = 'move'
+            }}
+            onDragEnd={() => setDropTarget(null)}
+            onClick={() => selectProject(project.path)}
+            onDoubleClick={() => onOpenProject(project.path)}
+            className={projectItemClass(project.path)}
+            style={rowIndent(depth, false)}
+            title={`${project.path}\n双击打开仓库，可拖拽到目录`}
           >
             <FolderGit2 className="size-3.5 shrink-0 text-primary" />
             <span className="min-w-0 flex-1 truncate">{node.name}</span>
@@ -1614,34 +1859,94 @@ function Dashboard({
         )
       }
 
-      const isCollapsed = collapsed.has(node.path)
+      const key = folderKey(node.folderId!)
+      const isCollapsed = collapsed.has(key)
+      const isRenaming = renaming?.id === node.folderId
       return (
-        <div key={node.path}>
-          <button
-            type="button"
-            onClick={() => toggle(node.path)}
-            className="flex w-full items-center gap-1 rounded-md py-1.5 pr-2 text-left text-sm text-foreground transition-colors hover:bg-muted"
-            style={indent}
+        <div key={key}>
+          <div
+            className={`group/folder flex w-full items-center gap-1 rounded-md py-1.5 pr-1 text-sm text-foreground transition-colors hover:bg-muted ${dropHighlight(node.folderId!)}`}
+            style={rowIndent(depth, true)}
+            {...dropHandlers(node.folderId!)}
           >
-            {isCollapsed ? (
-              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+            {isRenaming ? (
+              <>
+                <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+                <Input
+                  ref={renamingRef}
+                  value={renaming.value}
+                  onChange={(event) => setRenaming({ id: node.folderId!, value: event.target.value })}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') commitRename()
+                    if (event.key === 'Escape') setRenaming(null)
+                  }}
+                  onBlur={commitRename}
+                  className="h-6 min-w-0 flex-1 px-1 py-0 text-sm"
+                />
+              </>
             ) : (
-              <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+              <>
+                <button
+                  type="button"
+                  onClick={() => toggle(key)}
+                  className="flex min-w-0 flex-1 items-center gap-1 text-left"
+                >
+                  {isCollapsed ? (
+                    <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                  ) : (
+                    <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+                  )}
+                  <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate font-medium">{node.name}</span>
+                </button>
+                <span className="hidden shrink-0 items-center gap-0.5 group-hover/folder:flex">
+                  <button
+                    type="button"
+                    title="新建子文件夹"
+                    className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                    onClick={() => startAddFolder(node.folderId!)}
+                  >
+                    <Plus className="size-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    title="重命名"
+                    className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                    onClick={() => setRenaming({ id: node.folderId!, value: node.name })}
+                  >
+                    <Pencil className="size-3" />
+                  </button>
+                  <button
+                    type="button"
+                    title="删除文件夹"
+                    className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-destructive hover:text-destructive-foreground"
+                    onClick={() => setDeletingFolder(folders.find((item) => item.id === node.folderId) ?? null)}
+                  >
+                    <Trash2 className="size-3" />
+                  </button>
+                </span>
+              </>
             )}
-            <Folder className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 flex-1 truncate font-medium">{node.name}</span>
-          </button>
+          </div>
           {!isCollapsed && renderNodes(node.children, depth + 1)}
         </div>
       )
     })
 
   return (
-    <div className="flex min-h-0 flex-1">
-      <aside className="flex w-1/5 min-w-56 shrink-0 flex-col border-r">
+    <div className="flex min-h-0 flex-1 select-none">
+      <aside className="flex min-w-44 shrink-0 flex-col" style={{ width: sideWidth }}>
         <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
           <Home className="size-4 text-primary" />
-          <span className="text-sm font-semibold">Dashboard</span>
+          <span className="text-sm font-semibold">GitPower</span>
+          <button
+            type="button"
+            title="设置"
+            onClick={onOpenSettings}
+            className="ml-auto rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+          >
+            <Settings className="size-4" />
+          </button>
         </div>
         <ScrollArea className="min-h-0 flex-1">
           <div className="space-y-4 p-2">
@@ -1659,9 +1964,10 @@ function Dashboard({
                     key={project.path}
                     type="button"
                     disabled={busy}
-                    onClick={() => onOpenProject(project.path)}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-muted disabled:opacity-50"
-                    title={project.path}
+                    onClick={() => selectProject(project.path)}
+                    onDoubleClick={() => onOpenProject(project.path)}
+                    className={projectItemClass(project.path, 'px-2')}
+                    title={`${project.path}\n双击打开仓库`}
                   >
                     <FolderGit2 className="size-3.5 shrink-0 text-primary" />
                     <span className="min-w-0 flex-1 truncate">{project.name}</span>
@@ -1676,27 +1982,142 @@ function Dashboard({
               <div className="mb-1 flex items-center gap-1.5 px-2 text-xs font-medium uppercase text-muted-foreground">
                 <FolderGit2 className="size-3.5" />
                 Repositories
+                <button
+                  type="button"
+                  title="新建文件夹"
+                  className="ml-auto rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  onClick={() => startAddFolder(0)}
+                >
+                  <Plus className="size-3.5" />
+                </button>
               </div>
-              {projects.length === 0 ? (
-                <div className="px-2 py-1 text-xs text-muted-foreground">暂无仓库</div>
-              ) : (
-                <div className="space-y-0.5">{renderNodes(tree, 0)}</div>
-              )}
+              <div
+                className={`min-h-6 space-y-0.5 ${dropHighlight('root')}`}
+                {...dropHandlers('root')}
+              >
+                {tree.length === 0 ? (
+                  <div className="px-2 py-1 text-xs text-muted-foreground">
+                    暂无仓库，可新建文件夹整理
+                  </div>
+                ) : (
+                  renderNodes(tree, 0)
+                )}
+              </div>
             </div>
           </div>
         </ScrollArea>
       </aside>
+
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        className="relative w-px shrink-0 cursor-col-resize bg-border transition-colors before:absolute before:inset-y-0 before:-left-1 before:w-2 before:content-[''] hover:bg-primary/50 active:bg-primary"
+        style={noDragStyle}
+        onMouseDown={startSideDrag}
+      />
+
       <main className="flex min-w-0 flex-1 flex-col items-center justify-center gap-4 text-muted-foreground">
-        <FolderGit2 className="size-10 text-primary" />
-        <div className="text-center">
-          <p className="font-medium text-foreground">打开一个 Git 仓库</p>
-          <p className="mt-1 text-sm">从左侧选择最近或已登记的仓库，或选择本机上的 Git 仓库目录</p>
-        </div>
-        <Button onClick={onOpen} disabled={busy}>
-          <FolderGit2 />
-          打开仓库
-        </Button>
+        {summaryLoading ? (
+          <div className="text-sm">读取仓库信息...</div>
+        ) : summary ? (
+          <div className="w-full max-w-xl space-y-4 p-8">
+            <div className="flex items-center gap-3">
+              <FolderGit2 className="size-8 shrink-0 text-primary" />
+              <div className="min-w-0">
+                <div className="truncate text-lg font-semibold text-foreground">{summary.name}</div>
+                <div className="truncate font-mono text-xs" title={summary.path}>{summary.path}</div>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+              <SummaryRow label="当前分支" value={summary.detached ? `分离 HEAD (${summary.currentBranch})` : summary.currentBranch || '无'} />
+              <SummaryRow label="远程仓库" value={summary.remotes.join(', ') || '无'} />
+              <SummaryRow label="分支" value={`本地 ${summary.localBranches} · 远程 ${summary.remoteBranches}`} />
+              <SummaryRow label="提交数" value={String(summary.commits)} />
+              <SummaryRow label="未提交更改" value={String(summary.changes)} />
+              <SummaryRow label="未推送提交" value={String(summary.aheadCommits)} />
+            </div>
+            {summary.lastCommit && (
+              <div className="space-y-1 rounded-lg border p-3">
+                <div className="text-[11px] font-medium uppercase text-muted-foreground">最近一次提交</div>
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="shrink-0 font-mono text-primary">{summary.lastCommit.shortHash}</span>
+                  <Badge variant="secondary" className="h-auto shrink-0 px-1.5 py-0 text-[10px] leading-4">
+                    {summary.lastCommit.author}
+                  </Badge>
+                  <span className="min-w-0 flex-1 truncate font-medium text-foreground">
+                    {summary.lastCommit.subject}
+                  </span>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={(props) => (
+                        <span {...props} className="shrink-0 text-xs" />
+                      )}
+                    >
+                      {formatRelativeTime(summary.lastCommit.date)}
+                    </TooltipTrigger>
+                    <TooltipContent>{formatDate(summary.lastCommit.date)}</TooltipContent>
+                  </Tooltip>
+                </div>
+              </div>
+            )}
+            <div className="flex justify-end">
+              <Button onClick={() => onOpenProject(summary.path)} disabled={busy}>
+                <FolderGit2 />
+                打开仓库
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <FolderGit2 className="size-10 text-primary" />
+            <div className="text-center">
+              <p className="font-medium text-foreground">打开一个 Git 仓库</p>
+              <p className="mt-1 text-sm">单击左侧项目查看仓库信息，双击打开仓库，或选择本机上的 Git 仓库目录</p>
+            </div>
+            <Button onClick={onOpen} disabled={busy}>
+              <FolderGit2 />
+              打开仓库
+            </Button>
+          </>
+        )}
       </main>
+
+      <AlertDialog
+        open={deletingFolder !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeletingFolder(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除文件夹</AlertDialogTitle>
+            <AlertDialogDescription>
+              删除「{deletingFolder?.name}」后，其中的仓库与子文件夹会移到上一层。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (deletingFolder) onDeleteFolder(deletingFolder.id)
+                setDeletingFolder(null)
+              }}
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
+}
+
+function SummaryRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="min-w-0 truncate text-right font-medium text-foreground">{value}</span>
     </div>
   )
 }
@@ -2141,6 +2562,8 @@ function ChangeGroup({
   onStageDirectory,
   onUnstage,
   onUnstageDirectory,
+  onStageAll,
+  onUnstageAll,
   onOpen,
   onCopyPath,
   onIgnore,
@@ -2156,6 +2579,8 @@ function ChangeGroup({
   onStageDirectory: (directory: string) => void
   onUnstage: (change: Change) => void
   onUnstageDirectory: (directory: string) => void
+  onStageAll?: () => void
+  onUnstageAll?: () => void
   onOpen: (change: Change) => void
   onCopyPath: (change: Change) => void
   onIgnore: (change: Change) => void
@@ -2169,9 +2594,14 @@ function ChangeGroup({
   })
 
   const listItems: ChangeListItem[] = []
-  directories.forEach((group, directory) => {
+  const sortedDirectories = [...directories.keys()].sort((a, b) => {
+    if (!a) return 1
+    if (!b) return -1
+    return a.localeCompare(b)
+  })
+  sortedDirectories.forEach((directory) => {
     if (directory) listItems.push({ type: 'directory', directory })
-    group.forEach((change) => listItems.push({ type: 'change', directory, change }))
+    directories.get(directory)!.forEach((change) => listItems.push({ type: 'change', directory, change }))
   })
 
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -2184,9 +2614,36 @@ function ChangeGroup({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center justify-between px-3 text-xs font-medium uppercase text-muted-foreground">
-        <span>{title}</span>
-        <Badge variant="outline">{changes.length}</Badge>
+      <div
+        className="flex items-center justify-between border-b px-3 py-0.5 text-xs font-medium uppercase text-muted-foreground"
+        style={{ backgroundColor: '#FBFBFB', borderColor: '#E6E6E6' }}
+      >
+        <div className="flex items-center gap-1.5">
+          <span>{title}</span>
+          <Badge variant="outline" className="text-[10px]">{changes.length}</Badge>
+        </div>
+        {onStageAll && (
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            title="全部暂存"
+            disabled={busy || changes.length === 0}
+            onClick={onStageAll}
+          >
+            <Plus />
+          </Button>
+        )}
+        {onUnstageAll && (
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            title="全部取消暂存"
+            disabled={busy || changes.length === 0}
+            onClick={onUnstageAll}
+          >
+            <Minus />
+          </Button>
+        )}
       </div>
       {changes.length === 0 ? (
         <div className="px-3 text-xs text-muted-foreground">无文件</div>
@@ -2218,7 +2675,7 @@ function ChangeGroup({
                       onDiscard={() => onDiscard({ path: `${item.directory}/`, originalPath: '', status: '??', staged: false, unstaged: true })}
                     />
                   ) : (
-                    <div className="px-1">
+                    <div className={item.directory ? 'ml-3 px-1' : 'px-1'}>
                       <ChangeRow
                         key={`${staged ? 'staged' : 'unstaged'}:${item.change.path}`}
                         change={item.change}

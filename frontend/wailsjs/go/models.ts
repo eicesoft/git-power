@@ -125,6 +125,73 @@ export namespace main {
 		}
 	}
 	
+	export class ProjectInfo {
+	    path: string;
+	    name: string;
+	    lastOpenedAt: string;
+	    folderId?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProjectInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.name = source["name"];
+	        this.lastOpenedAt = source["lastOpenedAt"];
+	        this.folderId = source["folderId"];
+	    }
+	}
+	export class Folder {
+	    id: number;
+	    name: string;
+	    parentId?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Folder(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.parentId = source["parentId"];
+	    }
+	}
+	export class DashboardData {
+	    folders: Folder[];
+	    projects: ProjectInfo[];
+	
+	    static createFrom(source: any = {}) {
+	        return new DashboardData(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.folders = this.convertValues(source["folders"], Folder);
+	        this.projects = this.convertValues(source["projects"], ProjectInfo);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class GitCommandLog {
 	    id: number;
 	    command: string;
@@ -149,21 +216,84 @@ export namespace main {
 	        this.success = source["success"];
 	    }
 	}
-	export class ProjectInfo {
-	    path: string;
-	    name: string;
-	    lastOpenedAt: string;
+	export class GitConfigEntry {
+	    key: string;
+	    value: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new ProjectInfo(source);
+	        return new GitConfigEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.value = source["value"];
+	    }
+	}
+	export class GitInfo {
+	    path: string;
+	    version: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GitInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.version = source["version"];
+	    }
+	}
+	
+	export class ProjectSummary {
+	    path: string;
+	    name: string;
+	    currentBranch: string;
+	    detached: boolean;
+	    remotes: string[];
+	    aheadCommits: number;
+	    localBranches: number;
+	    remoteBranches: number;
+	    commits: number;
+	    changes: number;
+	    lastCommit?: Commit;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProjectSummary(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
 	        this.name = source["name"];
-	        this.lastOpenedAt = source["lastOpenedAt"];
+	        this.currentBranch = source["currentBranch"];
+	        this.detached = source["detached"];
+	        this.remotes = source["remotes"];
+	        this.aheadCommits = source["aheadCommits"];
+	        this.localBranches = source["localBranches"];
+	        this.remoteBranches = source["remoteBranches"];
+	        this.commits = source["commits"];
+	        this.changes = source["changes"];
+	        this.lastCommit = this.convertValues(source["lastCommit"], Commit);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class Repository {
 	    path: string;
@@ -210,6 +340,34 @@ export namespace main {
 		    }
 		    return a;
 		}
+	}
+	export class Settings {
+	    scanDirectories: string[];
+	    diffFontFamily: string;
+	    diffFontSize: number;
+	    recentLimit: number;
+	    confirmDiscard: boolean;
+	    gitPath: string;
+	    agentBaseUrl: string;
+	    agentApiKey: string;
+	    agentModel: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Settings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.scanDirectories = source["scanDirectories"];
+	        this.diffFontFamily = source["diffFontFamily"];
+	        this.diffFontSize = source["diffFontSize"];
+	        this.recentLimit = source["recentLimit"];
+	        this.confirmDiscard = source["confirmDiscard"];
+	        this.gitPath = source["gitPath"];
+	        this.agentBaseUrl = source["agentBaseUrl"];
+	        this.agentApiKey = source["agentApiKey"];
+	        this.agentModel = source["agentModel"];
+	    }
 	}
 
 }

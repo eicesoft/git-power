@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -559,6 +560,81 @@ func TestProjectStore(t *testing.T) {
 	}
 }
 
+func TestProjectFolderStore(t *testing.T) {
+	store, err := NewProjectStore(filepath.Join(t.TempDir(), "projects.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	alpha := filepath.Join("D:", "work", "alpha")
+	if err := store.RecordProject(alpha, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+
+	work, err := store.AddFolder("工作", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := store.AddFolder("子项目", &work.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddFolder("  ", nil); err == nil {
+		t.Fatal("expected error for empty folder name")
+	}
+	if _, err := store.AddFolder("孤儿", ptrInt64(9999)); err == nil {
+		t.Fatal("expected error for missing parent folder")
+	}
+
+	if err := store.MoveProject(alpha, &sub.Id); err != nil {
+		t.Fatal(err)
+	}
+	projects, err := store.AllProjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].FolderId == nil || *projects[0].FolderId != sub.Id {
+		t.Fatalf("expected alpha in sub folder, got %+v", projects)
+	}
+	if err := store.MoveProject(filepath.Join("D:", "work", "missing"), nil); err == nil {
+		t.Fatal("expected error for unrecorded project")
+	}
+
+	if err := store.RenameFolder(work.Id, "公司"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RenameFolder(work.Id, ""); err == nil {
+		t.Fatal("expected error for empty folder name")
+	}
+
+	// 删除父目录后，子目录与仓库应上移到根级。
+	if err := store.DeleteFolder(work.Id); err != nil {
+		t.Fatal(err)
+	}
+	folders, err := store.AllFolders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(folders) != 1 || folders[0].Id != sub.Id || folders[0].ParentId != nil {
+		t.Fatalf("expected sub folder reparented to root, got %+v", folders)
+	}
+	projects, err = store.AllProjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].FolderId == nil || *projects[0].FolderId != sub.Id {
+		t.Fatalf("expected alpha kept in sub folder, got %+v", projects)
+	}
+	if err := store.DeleteFolder(work.Id); err == nil {
+		t.Fatal("expected error for missing folder")
+	}
+}
+
+func ptrInt64(value int64) *int64 {
+	return &value
+}
+
 func git(t *testing.T, path string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", path}, args...)...)
@@ -587,4 +663,145 @@ func read(t *testing.T, root, name string) string {
 		t.Fatal(err)
 	}
 	return string(content)
+}
+
+func TestSettingsRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+
+	// 设置文件不存在时应返回默认设置。
+	defaults, err := loadSettings(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaults.RecentLimit != 10 || defaults.DiffFontSize != 12 || !defaults.ConfirmDiscard {
+		t.Fatalf("unexpected default settings: %+v", defaults)
+	}
+
+	saved := Settings{
+		ScanDirectories: []string{"/tmp/workspace", "/tmp/other"},
+		DiffFontFamily:  "JetBrains Mono",
+		DiffFontSize:    14,
+		RecentLimit:     20,
+		ConfirmDiscard:  false,
+		GitPath:         "/usr/local/bin/git",
+		AgentBaseURL:    "https://api.example.com/v1",
+		AgentAPIKey:     "sk-test",
+		AgentModel:      "example-model",
+	}
+	if err := saveSettings(path, saved); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := loadSettings(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(reloaded, saved) {
+		t.Fatalf("unexpected reloaded settings: %+v", reloaded)
+	}
+}
+
+func TestLoadSettingsKeepsDefaultsForMissingFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"diffFontSize": 15, "confirmDiscard": false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, err := loadSettings(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.DiffFontSize != 15 || settings.ConfirmDiscard {
+		t.Fatalf("unexpected settings: %+v", settings)
+	}
+	// 文件中未出现的字段应保留默认值。
+	if settings.RecentLimit != 10 || len(settings.ScanDirectories) != 0 {
+		t.Fatalf("expected defaults for missing fields, got %+v", settings)
+	}
+}
+
+func TestParseGitConfig(t *testing.T) {
+	entries := parseGitConfig("user.name\nT\x00core.editor\n\x00core.quotepath\x00")
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 entries, got %+v", entries)
+	}
+	if entries[0].Key != "user.name" || entries[0].Value != "T" {
+		t.Errorf("unexpected first entry: %+v", entries[0])
+	}
+	if entries[1].Key != "core.editor" || entries[1].Value != "" {
+		t.Errorf("unexpected empty-value entry: %+v", entries[1])
+	}
+	if entries[2].Key != "core.quotepath" {
+		t.Errorf("unexpected valueless entry: %+v", entries[2])
+	}
+}
+
+func TestGitGlobalConfigWorkflow(t *testing.T) {
+	// 指向临时配置文件，避免改动开发机上的全局 Git 配置。
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
+
+	app := &App{}
+	entries, err := app.GetGitGlobalConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected empty global config, got %+v", entries)
+	}
+
+	if err := app.SetGitGlobalConfig("user.name", "设置测试"); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.SetGitGlobalConfig("core.quotepath", "false"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err = app.GetGitGlobalConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		values[entry.Key] = entry.Value
+	}
+	if values["user.name"] != "设置测试" || values["core.quotepath"] != "false" {
+		t.Fatalf("unexpected global config: %+v", values)
+	}
+
+	// 空值删除配置项，删除不存在的配置项不应报错。
+	if err := app.SetGitGlobalConfig("core.quotepath", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.SetGitGlobalConfig("core.pager", ""); err != nil {
+		t.Fatal(err)
+	}
+	entries, err = app.GetGitGlobalConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Key != "user.name" {
+		t.Fatalf("unexpected global config after unset: %+v", entries)
+	}
+}
+
+func TestSaveSettingsAppliesGitPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	app := &App{}
+	settings := defaultSettings()
+	settings.GitPath = "/tmp/custom-git"
+	if err := app.SaveSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	if gitCommand() != "/tmp/custom-git" {
+		t.Fatalf("expected configured git path, got %q", gitCommand())
+	}
+	if got := app.GetSettings(); got.GitPath != "/tmp/custom-git" {
+		t.Fatalf("unexpected stored settings: %+v", got)
+	}
+	settings.GitPath = ""
+	if err := app.SaveSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	if gitCommand() != "git" {
+		t.Fatalf("expected fallback git command, got %q", gitCommand())
+	}
 }

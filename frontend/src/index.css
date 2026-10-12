@@ -127,3 +127,17 @@
     @apply font-sans;
     }
 }
+
+/* 原生滚动条默认隐藏，悬停滚动区域时显示 */
+.scroll-on-hover {
+    scrollbar-width: none;
+    &:hover {
+        scrollbar-width: thin;
+    }
+    &::-webkit-scrollbar {
+        display: none;
+    }
+    &:hover::-webkit-scrollbar {
+        display: block;
+    }
+}

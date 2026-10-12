@@ -23,6 +23,8 @@ type App struct {
 	gitLogs    []GitCommandLog
 	logCounter int64
 	projects   *ProjectStore
+	settingsMu sync.Mutex
+	settings   Settings
 }
 
 // gitAction 标识前端请求的具体远程或临时保存操作。
@@ -109,7 +111,115 @@ func (a *App) startup(ctx context.Context) {
 	} else {
 		a.projects = store
 	}
+	settings, err := loadSettings(settingsPath())
+	if err != nil {
+		log.Printf("读取设置失败: %v", err)
+	}
+	a.settings = settings
+	setGitCommand(settings.GitPath)
 	setGitCommandLogSink(a.appendGitLog)
+}
+
+// GetSettings 返回当前应用设置。
+func (a *App) GetSettings() Settings {
+	a.settingsMu.Lock()
+	defer a.settingsMu.Unlock()
+	return a.settings
+}
+
+// SaveSettings 保存应用设置，并让 Git 客户端路径立即生效。
+func (a *App) SaveSettings(settings Settings) error {
+	settings = settings.normalized()
+	if err := saveSettings(settingsPath(), settings); err != nil {
+		return err
+	}
+	a.settingsMu.Lock()
+	a.settings = settings
+	a.settingsMu.Unlock()
+	setGitCommand(settings.GitPath)
+	return nil
+}
+
+// SelectScanDirectory 打开系统目录选择器，返回要加入扫描列表的目录。
+func (a *App) SelectScanDirectory() (string, error) {
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:                      "选择扫描目录",
+		CanCreateDirectories:       true,
+		ResolvesAliases:            true,
+		TreatPackagesAsDirectories: true,
+	})
+}
+
+// GitInfo 描述设置页展示的 Git 客户端信息。
+type GitInfo struct {
+	Path    string `json:"path"`
+	Version string `json:"version"`
+}
+
+// GetGitInfo 返回当前 Git 客户端的可执行文件路径与版本号。
+func (a *App) GetGitInfo() (GitInfo, error) {
+	path, err := exec.LookPath(gitCommand())
+	if err != nil {
+		return GitInfo{}, fmt.Errorf("未找到 Git 客户端 %q", gitCommand())
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	output, err := exec.Command(path, "--version").Output()
+	if err != nil {
+		return GitInfo{}, fmt.Errorf("执行 %s 失败: %w", path, err)
+	}
+	return GitInfo{Path: path, Version: strings.TrimSpace(string(output))}, nil
+}
+
+// GitConfigEntry 是全局 Git 配置中的一条键值。
+type GitConfigEntry struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// GetGitGlobalConfig 读取全局 Git 配置，供设置页展示与编辑。
+func (a *App) GetGitGlobalConfig() ([]GitConfigEntry, error) {
+	output, err := runGitCommand("config", "--global", "--list", "--null")
+	if err != nil {
+		// 尚未创建全局配置文件时 Git 会报错，此时视为没有配置。
+		if strings.Contains(err.Error(), "unable to read config file") {
+			return []GitConfigEntry{}, nil
+		}
+		return nil, err
+	}
+	return parseGitConfig(output), nil
+}
+
+// SetGitGlobalConfig 写入一条全局 Git 配置；value 为空时删除该配置项。
+func (a *App) SetGitGlobalConfig(key, value string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fmt.Errorf("配置项名称不能为空")
+	}
+	if value = strings.TrimSpace(value); value == "" {
+		// 删除不存在的配置项时 Git 会报错，先确认该配置项存在。
+		if _, err := runGitCommand("config", "--global", "--get", key); err != nil {
+			return nil
+		}
+		_, err := runGitCommand("config", "--global", "--unset", key)
+		return err
+	}
+	_, err := runGitCommand("config", "--global", key, value)
+	return err
+}
+
+// parseGitConfig 解析 git config --list --null 的 "key\nvalue\0" 输出。
+func parseGitConfig(output string) []GitConfigEntry {
+	entries := []GitConfigEntry{}
+	for _, record := range strings.Split(output, "\x00") {
+		if record == "" {
+			continue
+		}
+		key, value, _ := strings.Cut(record, "\n")
+		entries = append(entries, GitConfigEntry{Key: key, Value: value})
+	}
+	return entries
 }
 
 // WindowMinimise 最小化窗口。
@@ -166,20 +276,144 @@ func (a *App) RecordProject(path, name string) error {
 	return a.projects.RecordProject(path, name)
 }
 
-// ListRecentProjects 返回最近打开的最多 10 个仓库。
-func (a *App) ListRecentProjects() ([]ProjectInfo, error) {
+// ListRecentProjects 返回最近打开的最多 limit 个仓库。
+func (a *App) ListRecentProjects(limit int) ([]ProjectInfo, error) {
 	if a.projects == nil {
 		return []ProjectInfo{}, nil
 	}
-	return a.projects.RecentProjects(10)
+	return a.projects.RecentProjects(limit)
 }
 
-// ListDashboardRepositories 返回全部已登记仓库，按路径排序供目录树展示。
-func (a *App) ListDashboardRepositories() ([]ProjectInfo, error) {
+// ListDashboardRepositories 返回自定义目录与全部已登记仓库，供目录树展示。
+func (a *App) ListDashboardRepositories() (DashboardData, error) {
 	if a.projects == nil {
-		return []ProjectInfo{}, nil
+		return DashboardData{Folders: []Folder{}, Projects: []ProjectInfo{}}, nil
 	}
-	return a.projects.AllProjects()
+	folders, err := a.projects.AllFolders()
+	if err != nil {
+		return DashboardData{}, err
+	}
+	projects, err := a.projects.AllProjects()
+	if err != nil {
+		return DashboardData{}, err
+	}
+	return DashboardData{Folders: folders, Projects: projects}, nil
+}
+
+// AddDashboardFolder 在 parentId 指定的目录下新建文件夹，parentId 为 0 时建在根级。
+func (a *App) AddDashboardFolder(name string, parentId int64) (Folder, error) {
+	if a.projects == nil {
+		return Folder{}, fmt.Errorf("本地仓库存储不可用")
+	}
+	var parentID *int64
+	if parentId > 0 {
+		parentID = &parentId
+	}
+	return a.projects.AddFolder(name, parentID)
+}
+
+// RenameDashboardFolder 重命名自定义文件夹。
+func (a *App) RenameDashboardFolder(id int64, name string) error {
+	if a.projects == nil {
+		return fmt.Errorf("本地仓库存储不可用")
+	}
+	return a.projects.RenameFolder(id, name)
+}
+
+// DeleteDashboardFolder 删除自定义文件夹，其中的仓库与子文件夹移到上一层。
+func (a *App) DeleteDashboardFolder(id int64) error {
+	if a.projects == nil {
+		return fmt.Errorf("本地仓库存储不可用")
+	}
+	return a.projects.DeleteFolder(id)
+}
+
+// MoveDashboardProject 把仓库移动到指定文件夹，folderId 为 0 时移回根级。
+func (a *App) MoveDashboardProject(path string, folderId int64) error {
+	if a.projects == nil {
+		return fmt.Errorf("本地仓库存储不可用")
+	}
+	var folderID *int64
+	if folderId > 0 {
+		folderID = &folderId
+	}
+	return a.projects.MoveProject(path, folderID)
+}
+
+// ProjectSummary 是 Dashboard 单击项目时展示的仓库概要信息。
+type ProjectSummary struct {
+	Path           string   `json:"path"`
+	Name           string   `json:"name"`
+	CurrentBranch  string   `json:"currentBranch"`
+	Detached       bool     `json:"detached"`
+	Remotes        []string `json:"remotes"`
+	AheadCommits   int      `json:"aheadCommits"`
+	LocalBranches  int      `json:"localBranches"`
+	RemoteBranches int      `json:"remoteBranches"`
+	Commits        int      `json:"commits"`
+	Changes        int      `json:"changes"`
+	LastCommit     *Commit  `json:"lastCommit"`
+}
+
+// GetProjectSummary 读取仓库概要信息，供 Dashboard 单击预览，不加载完整提交历史与文件更改。
+func (a *App) GetProjectSummary(path string) (ProjectSummary, error) {
+	if strings.TrimSpace(path) == "" {
+		return ProjectSummary{}, fmt.Errorf("仓库路径不能为空")
+	}
+
+	root, err := runGit(path, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return ProjectSummary{}, fmt.Errorf("所选目录不是 Git 仓库: %w", err)
+	}
+	root = strings.TrimSpace(root)
+
+	summary := ProjectSummary{Path: root, Name: filepath.Base(root), Remotes: []string{}}
+
+	if current, err := runGit(root, "symbolic-ref", "--short", "HEAD"); err == nil {
+		summary.CurrentBranch = strings.TrimSpace(current)
+	} else if head, headErr := runGit(root, "rev-parse", "--short", "HEAD"); headErr == nil {
+		summary.Detached = true
+		summary.CurrentBranch = strings.TrimSpace(head)
+	}
+
+	summary.Remotes, err = loadRemotes(root)
+	if err != nil {
+		return ProjectSummary{}, err
+	}
+	branches, err := loadBranches(root, summary.CurrentBranch)
+	if err != nil {
+		return ProjectSummary{}, err
+	}
+	for _, branch := range branches {
+		if branch.Remote {
+			summary.RemoteBranches++
+		} else {
+			summary.LocalBranches++
+		}
+	}
+	summary.AheadCommits = loadAheadCommits(root, branches)
+
+	if output, err := runGit(root, "rev-list", "--count", "HEAD"); err == nil {
+		summary.Commits, _ = strconv.Atoi(strings.TrimSpace(output))
+	}
+	if changes, err := loadChanges(root); err == nil {
+		summary.Changes = len(changes)
+	}
+	if output, err := runGit(root, "log", "--max-count=1", "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%D%x1f%P"); err == nil {
+		fields := strings.SplitN(strings.TrimSpace(output), "\x1f", 7)
+		if len(fields) == 7 {
+			summary.LastCommit = &Commit{
+				Hash:        fields[0],
+				ShortHash:   fields[1],
+				Author:      fields[2],
+				Date:        fields[3],
+				Subject:     fields[4],
+				Decorations: fields[5],
+				Parents:     parseParents(fields[6]),
+			}
+		}
+	}
+	return summary, nil
 }
 
 // GetGitCommandLogs 返回最近的 Git 命令日志。
@@ -798,7 +1032,7 @@ func parseCommitFiles(output string) []CommitFile {
 }
 
 func runGitNoIndex(path, file string) (string, error) {
-	cmd := exec.Command("git", "-C", path, "diff", "--no-index", "--", "/dev/null", file)
+	cmd := exec.Command(gitCommand(), "-C", path, "diff", "--no-index", "--", "/dev/null", file)
 	startedAt := time.Now()
 	output, err := cmd.CombinedOutput()
 	commandArgs := []string{"-C", path, "diff", "--no-index", "--", "/dev/null", file}
@@ -819,11 +1053,14 @@ func runGitNoIndex(path, file string) (string, error) {
 }
 
 func runGit(path string, args ...string) (string, error) {
-	commandArgs := append([]string{"-C", path}, args...)
-	cmd := exec.Command("git", commandArgs...)
+	return runGitCommand(append([]string{"-C", path}, args...)...)
+}
+
+func runGitCommand(args ...string) (string, error) {
+	cmd := exec.Command(gitCommand(), args...)
 	startedAt := time.Now()
 	output, err := cmd.CombinedOutput()
-	recordGitCommand(commandArgs, output, err, err == nil, startedAt, time.Since(startedAt))
+	recordGitCommand(args, output, err, err == nil, startedAt, time.Since(startedAt))
 	if err != nil {
 		message := strings.TrimSpace(string(output))
 		if message == "" {

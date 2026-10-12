@@ -54,6 +54,7 @@ type Repository struct {
 	Name          string   `json:"name"`
 	CurrentBranch string   `json:"currentBranch"`
 	AheadCommits  int      `json:"aheadCommits"`
+	BehindCommits int      `json:"behindCommits"`
 	Detached      bool     `json:"detached"`
 	Remotes       []string `json:"remotes"`
 	Branches      []Branch `json:"branches"`
@@ -76,12 +77,14 @@ type Stash struct {
 }
 
 type Branch struct {
-	Name     string `json:"name"`
-	Ref      string `json:"ref"`
-	Hash     string `json:"hash"`
-	Upstream string `json:"upstream"`
-	Remote   bool   `json:"remote"`
-	Current  bool   `json:"current"`
+	Name          string `json:"name"`
+	Ref           string `json:"ref"`
+	Hash          string `json:"hash"`
+	Upstream      string `json:"upstream"`
+	Remote        bool   `json:"remote"`
+	Current       bool   `json:"current"`
+	AheadCommits  int    `json:"aheadCommits"`
+	BehindCommits int    `json:"behindCommits"`
 }
 
 type Commit struct {
@@ -405,7 +408,7 @@ func (a *App) GetProjectSummary(path string) (ProjectSummary, error) {
 			summary.LocalBranches++
 		}
 	}
-	summary.AheadCommits = loadAheadCommits(root, branches)
+	summary.AheadCommits, _ = currentSyncCounts(branches)
 
 	if output, err := runGit(root, "rev-list", "--count", "HEAD"); err == nil {
 		summary.Commits, _ = strconv.Atoi(strings.TrimSpace(output))
@@ -520,7 +523,7 @@ func LoadRepository(path string) (Repository, error) {
 	if err != nil {
 		return Repository{}, err
 	}
-	repo.AheadCommits = loadAheadCommits(root, repo.Branches)
+	repo.AheadCommits, repo.BehindCommits = currentSyncCounts(repo.Branches)
 	repo.Commits, err = loadCommits(root)
 	if err != nil {
 		return Repository{}, err
@@ -924,6 +927,10 @@ func loadBranches(path, current string) ([]Branch, error) {
 			Remote:   remote,
 			Current:  !remote && fields[0] == current,
 		})
+		if !remote && fields[3] != "" {
+			last := &branches[len(branches)-1]
+			last.AheadCommits, last.BehindCommits = loadSyncCounts(path, fields[3], fields[1])
+		}
 	}
 	if branches == nil {
 		branches = []Branch{}
@@ -988,23 +995,35 @@ func loadStashes(path string) ([]Stash, error) {
 	return stashes, nil
 }
 
-// loadAheadCommits 返回当前分支相对 upstream 尚未推送的提交数。
-func loadAheadCommits(path string, branches []Branch) int {
-	for _, branch := range branches {
-		if !branch.Current || branch.Upstream == "" {
-			continue
-		}
-		output, err := runGit(path, "rev-list", "--count", branch.Upstream+"..HEAD")
-		if err != nil {
-			return 0
-		}
-		count, err := strconv.Atoi(strings.TrimSpace(output))
-		if err != nil {
-			return 0
-		}
-		return count
+// loadSyncCounts 返回分支相对 upstream 尚未推送（ahead）与尚未拉取（behind）的提交数。
+func loadSyncCounts(path, upstream, branch string) (ahead, behind int) {
+	output, err := runGit(path, "rev-list", "--left-right", "--count", upstream+"..."+branch)
+	if err != nil {
+		return 0, 0
 	}
-	return 0
+	fields := strings.Fields(output)
+	if len(fields) != 2 {
+		return 0, 0
+	}
+	behind, err = strconv.Atoi(fields[0])
+	if err != nil {
+		return 0, 0
+	}
+	ahead, err = strconv.Atoi(fields[1])
+	if err != nil {
+		return 0, 0
+	}
+	return ahead, behind
+}
+
+// currentSyncCounts 返回当前分支的未推送与未拉取提交数。
+func currentSyncCounts(branches []Branch) (ahead, behind int) {
+	for _, branch := range branches {
+		if branch.Current {
+			return branch.AheadCommits, branch.BehindCommits
+		}
+	}
+	return 0, 0
 }
 
 func loadCommits(path string) ([]Commit, error) {

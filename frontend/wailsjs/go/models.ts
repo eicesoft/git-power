@@ -7,6 +7,8 @@ export namespace main {
 	    upstream: string;
 	    remote: boolean;
 	    current: boolean;
+	    aheadCommits: number;
+	    behindCommits: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Branch(source);
@@ -20,6 +22,8 @@ export namespace main {
 	        this.upstream = source["upstream"];
 	        this.remote = source["remote"];
 	        this.current = source["current"];
+	        this.aheadCommits = source["aheadCommits"];
+	        this.behindCommits = source["behindCommits"];
 	    }
 	}
 	export class Change {
@@ -334,6 +338,7 @@ export namespace main {
 	    name: string;
 	    currentBranch: string;
 	    aheadCommits: number;
+	    behindCommits: number;
 	    detached: boolean;
 	    remotes: string[];
 	    branches: Branch[];
@@ -352,6 +357,7 @@ export namespace main {
 	        this.name = source["name"];
 	        this.currentBranch = source["currentBranch"];
 	        this.aheadCommits = source["aheadCommits"];
+	        this.behindCommits = source["behindCommits"];
 	        this.detached = source["detached"];
 	        this.remotes = source["remotes"];
 	        this.branches = this.convertValues(source["branches"], Branch);

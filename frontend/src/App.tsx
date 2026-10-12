@@ -658,6 +658,7 @@ function App() {
   const pushTargetExists = pushRemoteBranches.includes(pushTarget)
   const pushTargetOptions = pushTargetExists ? pushRemoteBranches : [pushTarget, ...pushRemoteBranches]
   const aheadCommits = activeRepository?.aheadCommits ?? 0
+  const behindCommits = activeRepository?.behindCommits ?? 0
   const currentBranchHasUpstream = localBranches.some(
     (branch) => branch.current && branch.upstream,
   )
@@ -945,19 +946,26 @@ function App() {
                       label={branch.name}
                       detail={branch.upstream ? `上游: ${branch.upstream}` : branch.ref}
                       badge={
-                        branch.current ? (
-                          <>
-                            {branch.upstream && (
-                              <Badge
-                                variant="secondary"
-                                className="h-3.5 min-w-3.5 rounded-full px-1 text-[9px]"
-                              >
-                                {aheadCommits}
-                              </Badge>
-                            )}
-                            <Check className="size-3 shrink-0" />
-                          </>
-                        ) : undefined
+                        <>
+                          {branch.upstream && branch.aheadCommits > 0 && (
+                            <Badge
+                              variant="secondary"
+                              className="h-3.5 min-w-3.5 rounded-full px-1 text-[9px]"
+                              title={`${branch.aheadCommits} 个未推送提交`}
+                            >
+                              ↑{branch.aheadCommits}
+                            </Badge>
+                          )}
+                          {branch.upstream && branch.behindCommits > 0 && (
+                            <Badge
+                              className="h-3.5 min-w-3.5 rounded-full px-1 text-[9px]"
+                              title={`${branch.behindCommits} 个未拉取提交`}
+                            >
+                              ↓{branch.behindCommits}
+                            </Badge>
+                          )}
+                          {branch.current && <Check className="size-3 shrink-0" />}
+                        </>
                       }
                       current={branch.current}
                       selected={sidebarSelected === branch.ref}
@@ -1036,7 +1044,10 @@ function App() {
                   <Button
                     variant="ghost"
                     className={`h-11 ${
-                      item.action === 'push' && currentBranchHasUpstream ? 'w-16' : 'w-10'
+                      (item.action === 'push' && currentBranchHasUpstream) ||
+                      (item.action === 'pull' && currentBranchHasUpstream && behindCommits > 0)
+                        ? 'w-16'
+                        : 'w-10'
                     } flex-col gap-0.5 rounded-md px-1 text-[10px] text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent`}
                     onClick={() =>
                       item.action === 'pull'
@@ -1048,7 +1059,9 @@ function App() {
                     title={
                       item.action === 'push' && currentBranchHasUpstream
                         ? `${item.label}（${aheadCommits} 个未推送提交）`
-                        : item.label
+                        : item.action === 'pull' && currentBranchHasUpstream
+                          ? `${item.label}（${behindCommits} 个未拉取提交）`
+                          : item.label
                     }
                   >
                     <span className="relative flex h-7 w-7 items-center justify-center rounded-md p-1 group-hover/button:bg-muted">
@@ -1056,6 +1069,11 @@ function App() {
                       {item.action === 'push' && currentBranchHasUpstream && (
                         <Badge className="absolute -right-2.5 top-1 h-3.5 min-w-3.5 rounded-full px-1 text-[9px] leading-3">
                           {aheadCommits}
+                        </Badge>
+                      )}
+                      {item.action === 'pull' && currentBranchHasUpstream && behindCommits > 0 && (
+                        <Badge className="absolute -right-2.5 top-1 h-3.5 min-w-3.5 rounded-full px-1 text-[9px] leading-3">
+                          {behindCommits}
                         </Badge>
                       )}
                     </span>
@@ -1245,6 +1263,23 @@ function App() {
                         >
                           <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
                           <span className="min-w-0 flex-1 truncate">{branch.name}</span>
+                          {branch.upstream && branch.aheadCommits > 0 && (
+                            <Badge
+                              variant="secondary"
+                              className="h-4 rounded-full px-1 text-[9px]"
+                              title={`${branch.aheadCommits} 个未推送提交`}
+                            >
+                              ↑{branch.aheadCommits}
+                            </Badge>
+                          )}
+                          {branch.upstream && branch.behindCommits > 0 && (
+                            <Badge
+                              className="h-4 rounded-full px-1 text-[9px]"
+                              title={`${branch.behindCommits} 个未拉取提交`}
+                            >
+                              ↓{branch.behindCommits}
+                            </Badge>
+                          )}
                           {branch.current && <Check className="size-3.5 shrink-0 text-primary" />}
                         </Menu.Item>
                       ))}

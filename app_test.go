@@ -250,6 +250,88 @@ func TestLoadRepositoryAheadCommits(t *testing.T) {
 	}
 }
 
+func TestLoadRepositoryBehindCommits(t *testing.T) {
+	root := t.TempDir()
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	if err := os.MkdirAll(remote, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, root, "init", "-q", "-b", "main")
+	git(t, root, "config", "user.name", "Test User")
+	git(t, root, "config", "user.email", "test@example.com")
+	write(t, root, "first.txt", "one\n")
+	git(t, root, "add", "first.txt")
+	git(t, root, "commit", "-qm", "初始提交")
+	git(t, remote, "init", "-q", "--bare")
+	git(t, root, "remote", "add", "origin", remote)
+	git(t, root, "push", "-qu", "origin", "HEAD")
+
+	// 另一个工作副本向远程推送一笔提交，本地 fetch 后应产生 1 笔未拉取提交。
+	other := t.TempDir()
+	git(t, other, "init", "-q", "-b", "main")
+	git(t, other, "config", "user.name", "Test User")
+	git(t, other, "config", "user.email", "test@example.com")
+	git(t, other, "remote", "add", "origin", remote)
+	git(t, other, "fetch", "-q", "origin")
+	git(t, other, "checkout", "-q", "-B", "main", "origin/main")
+	write(t, other, "second.txt", "two\n")
+	git(t, other, "add", "second.txt")
+	git(t, other, "commit", "-qm", "远程提交")
+	git(t, other, "push", "-q", "origin", "main")
+	git(t, root, "fetch", "-q", "origin")
+
+	repo, err := LoadRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repo.BehindCommits != 1 || repo.AheadCommits != 0 {
+		t.Fatalf("expected 0 ahead and 1 behind commits, got ahead=%d behind=%d", repo.AheadCommits, repo.BehindCommits)
+	}
+}
+
+func TestLoadBranchesSyncCounts(t *testing.T) {
+	root := t.TempDir()
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	if err := os.MkdirAll(remote, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, root, "init", "-q", "-b", "main")
+	git(t, root, "config", "user.name", "Test User")
+	git(t, root, "config", "user.email", "test@example.com")
+	write(t, root, "first.txt", "one\n")
+	git(t, root, "add", "first.txt")
+	git(t, root, "commit", "-qm", "初始提交")
+	git(t, remote, "init", "-q", "--bare")
+	git(t, root, "remote", "add", "origin", remote)
+	git(t, root, "push", "-qu", "origin", "HEAD")
+
+	// feature 分支推送后再追加一笔提交，应计入该分支而非当前分支。
+	git(t, root, "switch", "-q", "-c", "feature")
+	git(t, root, "push", "-qu", "origin", "HEAD")
+	write(t, root, "feature.txt", "x\n")
+	git(t, root, "add", "feature.txt")
+	git(t, root, "commit", "-qm", "feature 提交")
+	git(t, root, "switch", "-q", "main")
+
+	repo, err := LoadRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, branch := range repo.Branches {
+		if branch.Remote || branch.Name != "feature" {
+			continue
+		}
+		if branch.Current {
+			t.Fatal("expected feature branch to be inactive")
+		}
+		if branch.AheadCommits != 1 || branch.BehindCommits != 0 {
+			t.Fatalf("expected feature branch ahead=1 behind=0, got ahead=%d behind=%d", branch.AheadCommits, branch.BehindCommits)
+		}
+		return
+	}
+	t.Fatalf("expected feature branch to exist, got %+v", repo.Branches)
+}
+
 func TestGetCommitDetail(t *testing.T) {
 	root := t.TempDir()
 	git(t, root, "init", "-q", "-b", "main")

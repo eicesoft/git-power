@@ -130,6 +130,7 @@ export namespace main {
 	    name: string;
 	    lastOpenedAt: string;
 	    folderId?: number;
+	    missing: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ProjectInfo(source);
@@ -141,6 +142,7 @@ export namespace main {
 	        this.name = source["name"];
 	        this.lastOpenedAt = source["lastOpenedAt"];
 	        this.folderId = source["folderId"];
+	        this.missing = source["missing"];
 	    }
 	}
 	export class Folder {
@@ -367,6 +369,22 @@ export namespace main {
 	        this.agentBaseUrl = source["agentBaseUrl"];
 	        this.agentApiKey = source["agentApiKey"];
 	        this.agentModel = source["agentModel"];
+	    }
+	}
+	export class SyncResult {
+	    found: number;
+	    added: number;
+	    updated: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SyncResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.found = source["found"];
+	        this.added = source["added"];
+	        this.updated = source["updated"];
 	    }
 	}
 

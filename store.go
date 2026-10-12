@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ type ProjectInfo struct {
 	Name         string `json:"name"`
 	LastOpenedAt string `json:"lastOpenedAt"`
 	FolderId     *int64 `json:"folderId"`
+	Missing      bool   `json:"missing"`
 }
 
 // Folder 描述 Dashboard Repositories 中用户自定义的一个目录。
@@ -67,27 +69,49 @@ func NewProjectStore(path string) (*ProjectStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("初始化目录表失败: %w", err)
 	}
-	// 旧库缺少 folder_id 列时补充。
-	hasFolderID := false
-	if rows, err := db.Query(`PRAGMA table_info(projects)`); err == nil {
-		for rows.Next() {
-			var cid int
-			var name, ctype string
-			var notnull, pk int
-			var dflt sql.NullString
-			if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err == nil && name == "folder_id" {
-				hasFolderID = true
-			}
-		}
-		rows.Close()
-	}
-	if !hasFolderID {
-		if _, err := db.Exec(`ALTER TABLE projects ADD COLUMN folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL`); err != nil {
+	// 旧库缺少后续新增的列时补齐。
+	for _, migration := range []struct {
+		column string
+		ddl    string
+	}{
+		{"folder_id", `ALTER TABLE projects ADD COLUMN folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL`},
+		{"missing", `ALTER TABLE projects ADD COLUMN missing INTEGER NOT NULL DEFAULT 0`},
+	} {
+		exists, err := tableHasColumn(db, "projects", migration.column)
+		if err != nil {
 			db.Close()
-			return nil, fmt.Errorf("迁移仓库目录字段失败: %w", err)
+			return nil, fmt.Errorf("检查仓库表结构失败: %w", err)
+		}
+		if exists {
+			continue
+		}
+		if _, err := db.Exec(migration.ddl); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("迁移仓库表字段 %s 失败: %w", migration.column, err)
 		}
 	}
 	return &ProjectStore{db: db}, nil
+}
+
+// tableHasColumn 判断表中是否已存在指定列。
+func tableHasColumn(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // RecordProject 登记或刷新一次仓库打开记录。
@@ -102,7 +126,7 @@ func (s *ProjectStore) RecordProject(path, name string) error {
 	}
 	_, err := s.db.Exec(
 		`INSERT INTO projects (path, name, last_opened_at) VALUES (?, ?, ?)
-		ON CONFLICT(path) DO UPDATE SET name = excluded.name, last_opened_at = excluded.last_opened_at`,
+		ON CONFLICT(path) DO UPDATE SET name = excluded.name, last_opened_at = excluded.last_opened_at, missing = 0`,
 		path, name, time.Now().UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -117,7 +141,7 @@ func (s *ProjectStore) RecentProjects(limit int) ([]ProjectInfo, error) {
 		limit = 10
 	}
 	rows, err := s.db.Query(
-		`SELECT path, name, last_opened_at, folder_id FROM projects ORDER BY last_opened_at DESC, path DESC LIMIT ?`,
+		`SELECT path, name, last_opened_at, folder_id, missing FROM projects ORDER BY last_opened_at DESC, path DESC LIMIT ?`,
 		limit,
 	)
 	if err != nil {
@@ -128,7 +152,7 @@ func (s *ProjectStore) RecentProjects(limit int) ([]ProjectInfo, error) {
 
 // AllProjects 返回全部已登记仓库，按名称排序供目录树展示。
 func (s *ProjectStore) AllProjects() ([]ProjectInfo, error) {
-	rows, err := s.db.Query(`SELECT path, name, last_opened_at, folder_id FROM projects ORDER BY name`)
+	rows, err := s.db.Query(`SELECT path, name, last_opened_at, folder_id, missing FROM projects ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("读取仓库列表失败: %w", err)
 	}
@@ -179,6 +203,66 @@ func (s *ProjectStore) AddFolder(name string, parentID *int64) (Folder, error) {
 		return Folder{}, fmt.Errorf("读取目录 ID 失败: %w", err)
 	}
 	return Folder{Id: id, Name: name, ParentId: parentID}, nil
+}
+
+// EnsureFolder 返回同层同名目录，不存在时创建。
+func (s *ProjectStore) EnsureFolder(name string, parentID *int64) (Folder, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return Folder{}, fmt.Errorf("目录名称不能为空")
+	}
+	var id int64
+	err := s.db.QueryRow(`SELECT id FROM folders WHERE name = ? AND parent_id IS ?`, name, parentID).Scan(&id)
+	if err == nil {
+		return Folder{Id: id, Name: name, ParentId: parentID}, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return Folder{}, fmt.Errorf("查询目录失败: %w", err)
+	}
+	return s.AddFolder(name, parentID)
+}
+
+// SyncProject 登记扫描发现的仓库，返回是否为新增记录。
+// folderID 与最近打开时间只在首次登记时写入：已有记录保留用户手工归位的目录，
+// 也不会因为同步而刷新“最近”列表。
+func (s *ProjectStore) SyncProject(path, name string, folderID *int64) (bool, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false, fmt.Errorf("仓库路径不能为空")
+	}
+	path = filepath.Clean(path)
+	if name == "" {
+		name = filepath.Base(path)
+	}
+	var exists int
+	if err := s.db.QueryRow(`SELECT COUNT(1) FROM projects WHERE path = ?`, path).Scan(&exists); err != nil {
+		return false, fmt.Errorf("查询仓库记录失败: %w", err)
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO projects (path, name, last_opened_at, folder_id, missing) VALUES (?, ?, ?, ?, 0)
+		ON CONFLICT(path) DO UPDATE SET name = excluded.name, missing = 0`,
+		path, name, time.Now().UTC().Format(time.RFC3339Nano), folderID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("保存仓库记录失败: %w", err)
+	}
+	return exists == 0, nil
+}
+
+// MarkMissingWithin 把扫描目录 scope 之下的已登记仓库全部标记为缺失，
+// 同步中重新发现的仓库会由 SyncProject 清除该标记。
+func (s *ProjectStore) MarkMissingWithin(scope string) error {
+	scope = filepath.Clean(strings.TrimSpace(scope))
+	if scope == "" || scope == "." {
+		return fmt.Errorf("扫描目录不能为空")
+	}
+	prefix := scope + string(filepath.Separator)
+	// instr 返回 1 表示 path 以 prefix 开头，避免 LIKE 的通配符与大小写规则。
+	_, err := s.db.Exec(`UPDATE projects SET missing = 1 WHERE path = ? OR instr(path, ?) = 1`, scope, prefix)
+	if err != nil {
+		return fmt.Errorf("标记缺失仓库失败: %w", err)
+	}
+	return nil
 }
 
 // RenameFolder 修改自定义目录名称。
@@ -245,7 +329,7 @@ func scanProjects(rows *sql.Rows) ([]ProjectInfo, error) {
 	projects := []ProjectInfo{}
 	for rows.Next() {
 		var project ProjectInfo
-		if err := rows.Scan(&project.Path, &project.Name, &project.LastOpenedAt, &project.FolderId); err != nil {
+		if err := rows.Scan(&project.Path, &project.Name, &project.LastOpenedAt, &project.FolderId, &project.Missing); err != nil {
 			return nil, fmt.Errorf("解析仓库记录失败: %w", err)
 		}
 		projects = append(projects, project)

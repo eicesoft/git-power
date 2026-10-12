@@ -140,7 +140,7 @@ func (a *App) SaveSettings(settings Settings) error {
 	return nil
 }
 
-// SelectScanDirectory 打开系统目录选择器，返回要加入扫描列表的目录。
+// SelectScanDirectory 打开系统目录选择器，返回用户选择的扫描目录。
 func (a *App) SelectScanDirectory() (string, error) {
 	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:                      "选择扫描目录",
@@ -971,7 +971,7 @@ func parseParents(output string) []string {
 }
 
 func loadChanges(path string) ([]Change, error) {
-	output, err := runGit(path, "status", "--porcelain=v1", "-z", "--untracked-files=normal")
+	output, err := runGit(path, "status", "--porcelain=v1", "-z", "--untracked-files=all")
 	if err != nil {
 		return nil, fmt.Errorf("读取工作区更改失败: %w", err)
 	}

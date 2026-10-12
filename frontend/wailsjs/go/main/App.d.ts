@@ -64,6 +64,8 @@ export function StageChange(arg1:string,arg2:string,arg3:string):Promise<main.Re
 
 export function SwitchBranch(arg1:string,arg2:string,arg3:boolean):Promise<main.Repository>;
 
+export function SyncRepositories():Promise<main.SyncResult>;
+
 export function UnstageChange(arg1:string,arg2:string,arg3:string):Promise<main.Repository>;
 
 export function WindowClose():Promise<void>;

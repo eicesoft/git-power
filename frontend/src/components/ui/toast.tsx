@@ -17,6 +17,15 @@ export function toastError(description?: React.ReactNode, title = "操作失败"
   })
 }
 
+export function toastSuccess(description?: React.ReactNode, title = "完成") {
+  toastManager.add({
+    type: "success",
+    title,
+    description,
+    timeout: 4000,
+  })
+}
+
 function ToastItem({ toast }: { toast: ToastObject<Record<string, never>> }) {
   const { close } = ToastPrimitive.useToastManager()
   const isError = toast.type === "error"

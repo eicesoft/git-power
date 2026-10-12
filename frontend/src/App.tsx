@@ -1,4 +1,16 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type Dispatch,
+  type DragEvent as ReactDragEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+  type SetStateAction,
+} from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Menu } from '@base-ui/react/menu'
 import { Popover } from '@base-ui/react/popover'
@@ -15,6 +27,7 @@ import {
   FileText,
   Folder,
   FolderGit2,
+  FolderX,
   GitBranch,
   GitCommitHorizontal,
   Home,
@@ -65,7 +78,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Toaster, toastError } from '@/components/ui/toast'
+import { Toaster, toastError, toastSuccess } from '@/components/ui/toast'
 import { DiffViewer } from '@/components/diff-viewer'
 import { SettingsDialog } from '@/components/settings-dialog'
 import { errorMessage } from '@/lib/utils'
@@ -99,6 +112,7 @@ import {
   SelectRepository,
   StageChange,
   SwitchBranch,
+  SyncRepositories,
   UnstageChange,
   WindowClose,
   WindowIsMaximised,
@@ -249,6 +263,10 @@ function App() {
   const [branchName, setBranchName] = useState('')
   const [creatingBranch, setCreatingBranch] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  // Repositories 目录树的展开状态由 App 持有：Dashboard 切换到仓库视图时会卸载，
+  // 这样切回来仍保留原来的展开情况，且初始为空即默认全部折叠。
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set())
   const [platform, setPlatform] = useState('')
   const [windowMaximised, setWindowMaximised] = useState(false)
   const [gitCommandLogs, setGitCommandLogs] = useState<GitCommandLogItem[]>([])
@@ -313,16 +331,12 @@ function App() {
     refreshGitInfo()
   }, [settingsOpen])
 
-  // updateSettings 保存改动；Git 客户端路径保存成功后立即刷新可用性与版本信息。
-  const updateSettings = (patch: Partial<Settings>) => {
-    if (!settings) return
-    const next = { ...settings, ...patch }
+  // saveSettings 写入完整设置，成功后才刷新界面状态；失败时抛给设置页提示。
+  const saveSettings = async (next: Settings) => {
+    const gitPathChanged = settings?.gitPath !== next.gitPath
+    await SaveSettings(next)
     setSettings(next)
-    SaveSettings(next)
-      .then(() => {
-        if ('gitPath' in patch) refreshGitInfo()
-      })
-      .catch((saveError) => toastError(errorMessage(saveError)))
+    if (gitPathChanged) refreshGitInfo()
   }
 
   const refreshGitCommandLogs = () => {
@@ -379,6 +393,24 @@ function App() {
     MoveDashboardProject(path, folderId)
       .then(refreshStoredProjects)
       .catch((moveError) => toastError(errorMessage(moveError)))
+  }
+
+  // 同步扫描设置中的目录，把发现的仓库按目录结构登记进 Repositories。
+  const syncRepositories = async () => {
+    if (busy || syncing) return
+    setSyncing(true)
+    try {
+      const result = await SyncRepositories()
+      await refreshStoredProjects()
+      toastSuccess(
+        `发现 ${result.found} 个仓库，新增 ${result.added} 个，更新 ${result.updated} 个`,
+        '同步完成',
+      )
+    } catch (syncError) {
+      toastError(errorMessage(syncError))
+    } finally {
+      setSyncing(false)
+    }
   }
 
   const updateRepository = (repository: Repository) => {
@@ -644,6 +676,12 @@ function App() {
       setDetailLoading(false)
       return
     }
+    // 未跟踪目录（以 / 结尾）无法生成 diff，跳过以免 git diff --no-index 报错。
+    if (selectedChange.change.path.endsWith('/')) {
+      setChangeDiff('')
+      setDetailLoading(false)
+      return
+    }
     let cancelled = false
     setDetailLoading(true)
     GetChangeDiff(
@@ -708,10 +746,10 @@ function App() {
           onValueChange={(value) => setActivePath(value === 'home' ? null : String(value))}
           className="min-w-0 flex-1 self-center"
         >
-          <TabsList className="min-w-0 justify-start overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <TabsList className="min-w-0 h-9! justify-start overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <TabsTrigger
               value="home"
-              className={activePath === null ? 'w-32 shrink-0 justify-start' : 'w-9 shrink-0 justify-center'}
+              className={`${activePath === null ? 'w-32 justify-start' : 'w-9 justify-center'} shrink-0 text-[13px]`}
               style={noDragStyle}
             >
               <Home className="size-4 shrink-0 text-primary" />
@@ -724,7 +762,7 @@ function App() {
               >
                 <TabsTrigger
                   value={repository.path}
-                  className="min-w-0 flex-1 justify-start pr-7"
+                  className="min-w-0 flex-1 justify-start pr-7 font-normal text-[13px]"
                   title={repository.path}
                   style={noDragStyle}
                 >
@@ -789,6 +827,9 @@ function App() {
       {!activeRepository ? (
         <Dashboard
           busy={busy}
+          syncing={syncing}
+          expandedFolders={expandedFolders}
+          onExpandedFoldersChange={setExpandedFolders}
           recentProjects={recentProjects}
           folders={storedFolders}
           projects={storedProjects}
@@ -798,6 +839,7 @@ function App() {
           onRenameFolder={renameDashboardFolder}
           onDeleteFolder={deleteDashboardFolder}
           onMoveProject={moveDashboardProject}
+          onSync={syncRepositories}
           onOpenSettings={() => setSettingsOpen(true)}
         />
       ) : (
@@ -1635,7 +1677,7 @@ function App() {
           onOpenChange={setSettingsOpen}
           settings={settings}
           gitInfo={gitInfo}
-          onChange={updateSettings}
+          onSave={saveSettings}
         />
       )}
 
@@ -1697,6 +1739,9 @@ const projectDragKey = 'application/x-gitpower-project'
 
 function Dashboard({
   busy,
+  syncing,
+  expandedFolders,
+  onExpandedFoldersChange,
   recentProjects,
   folders,
   projects,
@@ -1706,9 +1751,13 @@ function Dashboard({
   onRenameFolder,
   onDeleteFolder,
   onMoveProject,
+  onSync,
   onOpenSettings,
 }: {
   busy: boolean
+  syncing: boolean
+  expandedFolders: Set<string>
+  onExpandedFoldersChange: Dispatch<SetStateAction<Set<string>>>
   recentProjects: ProjectInfoItem[]
   folders: FolderItem[]
   projects: ProjectInfoItem[]
@@ -1718,9 +1767,9 @@ function Dashboard({
   onRenameFolder: (id: number, name: string) => void
   onDeleteFolder: (id: number) => void
   onMoveProject: (path: string, folderId: number) => void
+  onSync: () => void
   onOpenSettings: () => void
 }) {
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [summary, setSummary] = useState<ProjectSummaryItem | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
@@ -1741,11 +1790,11 @@ function Dashboard({
   // expandFolderChain 展开指定目录及其全部上层目录，保证新建或移入的目录可见。
   const expandFolderChain = (folderId: number) => {
     const parentById = new Map(folders.map((folder) => [folder.id, folder.parentId ?? 0]))
-    setCollapsed((prev) => {
+    onExpandedFoldersChange((prev) => {
       const next = new Set(prev)
       let current = folderId
       while (current) {
-        next.delete(folderKey(current))
+        next.add(folderKey(current))
         current = parentById.get(current) ?? 0
       }
       return next
@@ -1800,7 +1849,7 @@ function Dashboard({
   }
 
   const toggle = (key: string) =>
-    setCollapsed((prev) => {
+    onExpandedFoldersChange((prev) => {
       const next = new Set(prev)
       if (next.has(key)) next.delete(key)
       else next.add(key)
@@ -1851,16 +1900,25 @@ function Dashboard({
             onDoubleClick={() => onOpenProject(project.path)}
             className={projectItemClass(project.path)}
             style={rowIndent(depth, false)}
-            title={`${project.path}\n双击打开仓库，可拖拽到目录`}
+            title={
+              project.missing
+                ? `${project.path}\n仓库已不在磁盘上`
+                : `${project.path}\n双击打开仓库，可拖拽到目录`
+            }
           >
-            <FolderGit2 className="size-3.5 shrink-0 text-primary" />
+            {project.missing ? (
+              <FolderX className="size-3.5 shrink-0 text-muted-foreground" />
+            ) : (
+              <FolderGit2 className="size-3.5 shrink-0 text-primary" />
+            )}
             <span className="min-w-0 flex-1 truncate">{node.name}</span>
           </button>
         )
       }
 
       const key = folderKey(node.folderId!)
-      const isCollapsed = collapsed.has(key)
+      // 展开状态默认为空，目录树初始全部折叠，点开的目录由 App 记住。
+      const isCollapsed = !expandedFolders.has(key)
       const isRenaming = renaming?.id === node.folderId
       return (
         <div key={key}>
@@ -1984,8 +2042,17 @@ function Dashboard({
                 Repositories
                 <button
                   type="button"
+                  title={syncing ? '同步中...' : '同步扫描目录'}
+                  disabled={busy || syncing}
+                  onClick={onSync}
+                  className="ml-auto rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
+                >
+                  <RefreshCw className={`size-3.5${syncing ? ' animate-spin' : ''}`} />
+                </button>
+                <button
+                  type="button"
                   title="新建文件夹"
-                  className="ml-auto rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                   onClick={() => startAddFolder(0)}
                 >
                   <Plus className="size-3.5" />
@@ -1997,7 +2064,7 @@ function Dashboard({
               >
                 {tree.length === 0 ? (
                   <div className="px-2 py-1 text-xs text-muted-foreground">
-                    暂无仓库，可新建文件夹整理
+                    暂无仓库，点击同步扫描目录或新建文件夹整理
                   </div>
                 ) : (
                   renderNodes(tree, 0)
@@ -2137,6 +2204,8 @@ function BranchGroup({
   aheadCommits: number
   onSelect: (branch: Branch) => void
 }) {
+  const [selected, setSelected] = useState<string | null>(null)
+
   return (
     <div>
       <div className="mb-1 flex items-center gap-1.5 px-2 text-xs font-medium uppercase text-muted-foreground">
@@ -2150,10 +2219,14 @@ function BranchGroup({
             key={branch.ref}
             type="button"
             disabled={busy || branch.current}
+            onClick={() => setSelected(branch.ref)}
+            onDoubleClick={() => onSelect(branch)}
             className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors ${
               branch.current
                 ? 'bg-primary/10 font-medium text-primary'
-                : 'text-foreground hover:bg-muted'
+                : selected === branch.ref
+                  ? 'bg-accent font-medium text-accent-foreground'
+                  : 'text-foreground hover:bg-muted'
             }`}
             title={branch.upstream ? `上游: ${branch.upstream}` : branch.ref}
           >
@@ -2588,8 +2661,10 @@ function ChangeGroup({
 }) {
   const directories = new Map<string, Change[]>()
   changes.forEach((change) => {
-    const separator = change.path.lastIndexOf('/')
-    const directory = separator < 0 ? '' : change.path.slice(0, separator)
+    // 未跟踪目录（如嵌套 git 仓库）以 / 结尾，去掉尾斜杠后取父目录，避免文件名显示为空。
+    const normalizedPath = change.path.replace(/\/$/, '')
+    const separator = normalizedPath.lastIndexOf('/')
+    const directory = separator < 0 ? '' : normalizedPath.slice(0, separator)
     directories.set(directory, [...(directories.get(directory) ?? []), change])
   })
 

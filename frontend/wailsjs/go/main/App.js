@@ -126,6 +126,10 @@ export function SwitchBranch(arg1, arg2, arg3) {
   return window['go']['main']['App']['SwitchBranch'](arg1, arg2, arg3);
 }
 
+export function SyncRepositories() {
+  return window['go']['main']['App']['SyncRepositories']();
+}
+
 export function UnstageChange(arg1, arg2, arg3) {
   return window['go']['main']['App']['UnstageChange'](arg1, arg2, arg3);
 }

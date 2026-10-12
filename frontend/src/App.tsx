@@ -41,6 +41,7 @@ import {
   RefreshCw,
   RotateCcw,
   Settings,
+  Tag as TagIcon,
   Terminal,
   Trash2,
   X,
@@ -223,6 +224,7 @@ function App() {
   const [activePath, setActivePath] = useState<string | null>(null)
   const [workspaceView, setWorkspaceView] = useState<'local' | 'commits'>('local')
   const [selectedChangeKey, setSelectedChangeKey] = useState('')
+  const [sidebarSelected, setSidebarSelected] = useState('')
   const [selectedCommitHash, setSelectedCommitHash] = useState('')
   const [changeDiff, setChangeDiff] = useState('')
   const [commitDetail, setCommitDetail] = useState<CommitDetailItem | null>(null)
@@ -285,6 +287,8 @@ function App() {
   const [pushTracking, setPushTracking] = useState(true)
   const [pushTags, setPushTags] = useState(false)
   const [pushForce, setPushForce] = useState(false)
+  const [branchDialogOpen, setBranchDialogOpen] = useState(false)
+  const [checkoutAfterCreate, setCheckoutAfterCreate] = useState(true)
   const [recentProjects, setRecentProjects] = useState<ProjectInfoItem[]>([])
   const [storedFolders, setStoredFolders] = useState<FolderItem[]>([])
   const [storedProjects, setStoredProjects] = useState<ProjectInfoItem[]>([])
@@ -302,6 +306,7 @@ function App() {
     setBranchName('')
     setSelectedChangeKey('')
     setSelectedCommitHash('')
+    setSidebarSelected('')
     setChangeDiff('')
     setCommitDetail(null)
     setDetailTab('info')
@@ -544,13 +549,14 @@ function App() {
     })
   }
 
-  const createBranch = () => {
+  const createBranch = (checkout: boolean) => {
     if (!activePath || !branchName.trim() || busy) return
     const path = activePath
     const name = branchName.trim()
     runAction(async () => {
-      const repository = await CreateBranch(path, name)
+      const repository = await CreateBranch(path, name, checkout)
       setCreatingBranch(false)
+      setBranchDialogOpen(false)
       setBranchName('')
       return repository
     })
@@ -643,6 +649,8 @@ function App() {
 
   const localBranches = activeRepository?.branches.filter((branch) => !branch.remote) ?? []
   const remoteBranches = activeRepository?.branches.filter((branch) => branch.remote) ?? []
+  const tags = activeRepository?.tags ?? []
+  const stashes = activeRepository?.stashes ?? []
   const pullRemoteBranches = (activeRepository?.branches ?? [])
     .filter((branch) => branch.remote && branch.name.startsWith(`${pullRemote}/`))
     .map((branch) => branch.name.slice(pullRemote.length + 1))
@@ -846,17 +854,41 @@ function App() {
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1">
             <aside className="flex min-w-40 shrink-0 flex-col" style={{ width: sidebarWidth }}>
-            <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
-              <div className="flex items-center gap-2">
-                <GitBranch className="size-4 text-primary" />
-                <span className="text-sm font-semibold">分支</span>
-                <Badge variant="secondary">{localBranches.length + remoteBranches.length}</Badge>
+            <Tabs
+              value={workspaceView}
+              onValueChange={(value) => setWorkspaceView(value as 'local' | 'commits')}
+              className="shrink-0 p-1"
+            >
+              <TabsList className="h-auto w-full gap-1 rounded-lg bg-muted/50 p-1">
+                <TabsTrigger
+                  value="local"
+                  className="h-7 flex-1 justify-center gap-1.5 rounded-md text-xs dark:data-active:border-transparent"
+                >
+                  <FileText className="size-3.5" />
+                  Local Changes
+                </TabsTrigger>
+                <TabsTrigger
+                  value="commits"
+                  className="relative h-7 flex-1 justify-center gap-1.5 rounded-md text-xs after:absolute after:inset-y-1 after:left-0 after:w-px after:bg-border after:opacity-100 after:content-[''] dark:data-active:border-transparent"
+                >
+                  <History className="size-3.5" />
+                  Commits
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+
+            <div className="flex h-8 shrink-0 items-center justify-between border-b px-2">
+              <div className="flex items-center gap-1.5">
+                <FolderGit2 className="size-3.5 text-primary" />
+                <span className="text-xs font-semibold">{activeRepository?.name ?? '仓库'}</span>
+                <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
+                  {localBranches.length + remoteBranches.length + tags.length + stashes.length}
+                </Badge>
               </div>
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-0.5">
                 <Button
                   variant="ghost"
-                  size="icon"
-                  className="size-7"
+                  size="icon-xs"
                   onClick={() => setCreatingBranch((value) => !value)}
                   disabled={busy}
                   title="新建分支"
@@ -865,8 +897,7 @@ function App() {
                 </Button>
                 <Button
                   variant="ghost"
-                  size="icon"
-                  className="size-7"
+                  size="icon-xs"
                   onClick={refreshRepository}
                   disabled={busy}
                   title="刷新仓库"
@@ -883,34 +914,99 @@ function App() {
                   value={branchName}
                   onChange={(event) => setBranchName(event.target.value)}
                   onKeyDown={(event) => {
-                    if (event.key === 'Enter') createBranch()
+                    if (event.key === 'Enter') createBranch(true)
                     if (event.key === 'Escape') setCreatingBranch(false)
                   }}
                   placeholder="新分支名称"
                 />
-                <Button size="icon" className="size-9" onClick={createBranch} disabled={!branchName.trim() || busy} title="创建分支">
+                <Button
+                  size="icon"
+                  className="size-9"
+                  onClick={() => createBranch(true)}
+                  disabled={!branchName.trim() || busy}
+                  title="创建分支"
+                >
                   <Check />
                 </Button>
               </div>
             )}
 
             <ScrollArea className="min-h-0 flex-1">
-              <div className="space-y-4 p-2">
-                <BranchGroup
-                  title="本地分支"
+              <div className="space-y-3 p-2">
+                <SidebarSection
+                  title="Branches"
                   icon={<GitBranch className="size-3.5" />}
-                  branches={localBranches}
-                  busy={busy}
-                  aheadCommits={aheadCommits}
-                  onSelect={switchBranch}
-                />
-                <RemoteBranchTree
-                  title="远程分支"
+                  count={localBranches.length}
+                >
+                  {localBranches.map((branch) => (
+                    <SidebarRow
+                      key={branch.ref}
+                      icon={<GitBranch className="size-3 shrink-0" />}
+                      label={branch.name}
+                      detail={branch.upstream ? `上游: ${branch.upstream}` : branch.ref}
+                      badge={
+                        branch.current ? (
+                          <>
+                            {branch.upstream && (
+                              <Badge
+                                variant="secondary"
+                                className="h-3.5 min-w-3.5 rounded-full px-1 text-[9px]"
+                              >
+                                {aheadCommits}
+                              </Badge>
+                            )}
+                            <Check className="size-3 shrink-0" />
+                          </>
+                        ) : undefined
+                      }
+                      current={branch.current}
+                      selected={sidebarSelected === branch.ref}
+                      disabled={busy || branch.current}
+                      onClick={() => setSidebarSelected(branch.ref)}
+                      onDoubleClick={() => switchBranch(branch)}
+                    />
+                  ))}
+                </SidebarSection>
+
+                <SidebarSection
+                  title="Remotes"
                   icon={<Cloud className="size-3.5" />}
-                  branches={remoteBranches}
-                  busy={busy}
-                  onSelect={switchBranch}
-                />
+                  count={remoteBranches.length}
+                >
+                  <RemoteBranchNodes
+                    branches={remoteBranches}
+                    busy={busy}
+                    selected={sidebarSelected}
+                    onSelectItem={setSidebarSelected}
+                    onOpen={switchBranch}
+                  />
+                </SidebarSection>
+
+                <SidebarSection title="Tags" icon={<TagIcon className="size-3.5" />} count={tags.length}>
+                  {tags.map((tag) => (
+                    <SidebarRow
+                      key={tag.ref}
+                      icon={<TagIcon className="size-3 shrink-0" />}
+                      label={tag.name}
+                      detail={`${tag.ref} · ${tag.hash}`}
+                      selected={sidebarSelected === tag.ref}
+                      onClick={() => setSidebarSelected(tag.ref)}
+                    />
+                  ))}
+                </SidebarSection>
+
+                <SidebarSection title="Stashes" icon={<Archive className="size-3.5" />} count={stashes.length}>
+                  {stashes.map((stash) => (
+                    <SidebarRow
+                      key={stash.ref}
+                      icon={<Archive className="size-3 shrink-0" />}
+                      label={stash.message}
+                      detail={`${stash.ref} · ${stash.hash} · ${stash.message}`}
+                      selected={sidebarSelected === stash.ref}
+                      onClick={() => setSidebarSelected(stash.ref)}
+                    />
+                  ))}
+                </SidebarSection>
               </div>
             </ScrollArea>
           </aside>
@@ -926,22 +1022,6 @@ function App() {
           <main className="flex min-w-0 flex-1 flex-col bg-muted/30">
           {activeRepository && (
             <div className="flex h-[56px] shrink-0 items-center border-b px-2 py-1" style={noDragStyle}>
-            <Tabs
-              value={workspaceView}
-              onValueChange={(value) => setWorkspaceView(value as 'local' | 'commits')}
-              className="shrink-0"
-            >
-              <TabsList className="grid h-11! grid-cols-2 p-0">
-                <TabsTrigger value="local" className="h-full flex-col gap-0.5 px-2 text-[10px] text-muted-foreground">
-                  <FileText className="size-5" />
-                  Local Changes
-                </TabsTrigger>
-                <TabsTrigger value="commits" className="h-full flex-col gap-0.5 px-2 text-[10px] text-muted-foreground">
-                  <History className="size-5" />
-                  Commits
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
             <div className="flex min-w-0 flex-1 items-center justify-center gap-10">
             <div className="flex items-center rounded-md">
               {toolbarActions.map((item, index) => (
@@ -988,7 +1068,7 @@ function App() {
             </div>
 
             <div
-              className="mx-2 flex h-9 min-w-64 max-w-xs flex-1 items-center justify-center gap-1 rounded-md border bg-background px-2"
+              className="mx-2 grid h-9 min-w-64 max-w-xs flex-1 grid-cols-3 items-center gap-1 rounded-md border bg-[#F5F5F5] px-2 dark:bg-[#262626]"
               title={activeRepository.path}
             >
               <Popover.Root
@@ -1004,7 +1084,7 @@ function App() {
                       {...props}
                       variant="ghost"
                       size="icon"
-                      className={`size-6 ${gitLogOpen ? 'text-primary' : ''}`}
+                      className={`size-6 justify-self-start ${gitLogOpen ? 'text-primary' : ''}`}
                       title="Git 命令行日志"
                       onClick={(event) => {
                         setGitLogAnchor({ x: event.clientX, y: event.clientY })
@@ -1129,7 +1209,7 @@ function App() {
                 </Popover.Portal>
               </Popover.Root>
               <span
-                className="min-w-0 shrink-0 truncate text-sm font-medium"
+                className="truncate text-center text-sm font-medium"
                 title={activeRepository.name}
               >
                 {activeRepository.name}
@@ -1140,7 +1220,7 @@ function App() {
                     <Button
                       {...props}
                       variant="ghost"
-                      className="h-7 min-w-0 max-w-48 shrink justify-center gap-1 px-2 text-sm"
+                      className="h-7 min-w-0 max-w-48 shrink justify-center gap-1 justify-self-end px-2 text-sm"
                       title="选择分支"
                     >
                       <span className="min-w-0 truncate text-muted-foreground">
@@ -1192,33 +1272,56 @@ function App() {
               </Menu.Root>
             </div>
 
-            <Menu.Root>
-              <Menu.Trigger
-                render={(props) => (
-                  <Button
-                    {...props}
-                    variant="ghost"
-                    className="h-9 flex-col gap-0.5 px-2 text-[10px] text-muted-foreground hover:text-foreground"
-                    title="Open In"
-                  >
-                    <Monitor className="size-3.5" />
-                    <span>Open In</span>
-                  </Button>
-                )}
-              />
-              <Menu.Portal>
-                <Menu.Positioner align="end">
-                  <Menu.Popup className="min-w-40 rounded-lg border bg-popover p-1 shadow-lg">
-                    <Menu.Item
-                      className="cursor-pointer rounded px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted"
-                                            onClick={() => window.open(`file://${activeRepository.path}`)}
+            <Button
+              variant="ghost"
+              className="h-11 w-10 flex-col gap-0.5 rounded-md px-1 text-[10px] text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent"
+              onClick={() => {
+                setBranchName('')
+                setCreatingBranch(false)
+                setCheckoutAfterCreate(true)
+                setBranchDialogOpen(true)
+              }}
+              disabled={busy}
+              title="Branch"
+            >
+              <span className="relative flex h-7 w-7 items-center justify-center rounded-md p-1 group-hover/button:bg-muted">
+                <GitBranch className="size-5" />
+              </span>
+              <span>Branch</span>
+            </Button>
+
+            </div>
+
+            <div className="flex shrink-0 items-center gap-10">
+              <Menu.Root>
+                <Menu.Trigger
+                  render={(props) => (
+                    <Button
+                      {...props}
+                      variant="ghost"
+                      className="h-11 min-w-10 flex-col gap-0.5 rounded-md px-1 text-[10px] text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent"
+                      title="Open In"
                     >
-                      Finder
-                    </Menu.Item>
-                  </Menu.Popup>
-                </Menu.Positioner>
-              </Menu.Portal>
-            </Menu.Root>
+                      <span className="relative flex h-7 w-7 items-center justify-center rounded-md p-1 group-hover/button:bg-muted">
+                        <Monitor className="size-5" />
+                      </span>
+                      <span>Open In</span>
+                    </Button>
+                  )}
+                />
+                <Menu.Portal>
+                  <Menu.Positioner align="end">
+                    <Menu.Popup className="min-w-40 rounded-lg border bg-popover p-1 shadow-lg">
+                      <Menu.Item
+                        className="cursor-pointer rounded px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted"
+                        onClick={() => window.open(`file://${activeRepository.path}`)}
+                      >
+                        Finder
+                      </Menu.Item>
+                    </Menu.Popup>
+                  </Menu.Positioner>
+                </Menu.Portal>
+              </Menu.Root>
             </div>
           </div>
         )}
@@ -1228,10 +1331,10 @@ function App() {
                   className="flex min-w-64 shrink-0 flex-col"
                   style={{ width: `${changesPaneRatio * 100}%` }}
                 >
-                  <div className="flex h-11 shrink-0 items-center justify-between border-b px-4">
-                    <div className="flex items-center gap-2">
-                      <FileText className="size-4 text-primary" />
-                      <span className="text-sm font-semibold">文件更改</span>
+                  <div className="flex h-8 shrink-0 items-center justify-between border-b px-3">
+                    <div className="flex items-center gap-1.5">
+                      <FileText className="size-3.5 text-primary" />
+                      <span className="text-xs font-semibold">文件更改</span>
                     </div>
                     <span className="text-xs text-muted-foreground">
                       {unstagedChanges.length} 未暂存 · {stagedChanges.length} 已暂存
@@ -1292,15 +1395,18 @@ function App() {
                 />
 
                 <section className="flex min-w-0 flex-1 flex-col">
-                  <div className="flex h-11 shrink-0 items-center justify-between border-b px-4">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <FileText className="size-4 shrink-0 text-primary" />
-                      <span className="truncate text-sm font-semibold">
+                  <div className="flex h-8 shrink-0 items-center justify-between border-b px-3">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <FileText className="size-3.5 shrink-0 text-primary" />
+                      <span className="truncate text-xs font-semibold">
                         {selectedChange ? selectedChange.change.path : '文件更改'}
                       </span>
                     </div>
                     {selectedChange && (
-                      <Badge variant={selectedChange.staged ? 'secondary' : 'outline'}>
+                      <Badge
+                        variant={selectedChange.staged ? 'secondary' : 'outline'}
+                        className="h-4 px-1.5 text-[10px]"
+                      >
                         {selectedChange.staged ? 'Staged' : 'Unstaged'}
                       </Badge>
                     )}
@@ -1388,11 +1494,11 @@ function App() {
                   className="flex min-w-64 shrink-0 flex-col"
                   style={{ width: `${commitsPaneRatio * 100}%` }}
                 >
-                  <div className="flex h-11 shrink-0 items-center justify-between border-b px-4">
-                    <div className="flex items-center gap-2">
-                      <History className="size-4 text-primary" />
-                      <span className="text-sm font-semibold">提交历史</span>
-                      <Badge variant="outline">
+                  <div className="flex h-8 shrink-0 items-center justify-between border-b px-3">
+                    <div className="flex items-center gap-1.5">
+                      <History className="size-3.5 text-primary" />
+                      <span className="text-xs font-semibold">提交历史</span>
+                      <Badge variant="outline" className="h-4 max-w-40 truncate px-1.5 text-[10px]">
                         {activeRepository.detached ? '分离 HEAD' : activeRepository.currentBranch || '未初始化分支'}
                       </Badge>
                     </div>
@@ -1432,10 +1538,14 @@ function App() {
                   onValueChange={(value) => setDetailTab(String(value))}
                   className="min-h-0 min-w-0 flex-1"
                 >
-                  <div className="flex h-11 shrink-0 items-center justify-between border-b px-4">
-                    <TabsList variant="line">
-                      <TabsTrigger value="info">提交信息</TabsTrigger>
-                      <TabsTrigger value="files">更改文件</TabsTrigger>
+                  <div className="flex h-8 shrink-0 items-center justify-between border-b px-3">
+                    <TabsList variant="line" className="h-7!">
+                      <TabsTrigger value="info" className="text-xs">
+                        提交信息
+                      </TabsTrigger>
+                      <TabsTrigger value="files" className="text-xs">
+                        更改文件
+                      </TabsTrigger>
                     </TabsList>
                     <span className="font-mono text-xs text-muted-foreground">
                       {commitDetail?.shortHash ?? selectedCommit?.shortHash ?? ''}
@@ -1500,6 +1610,53 @@ function App() {
 
       {activeRepository && (
         <>
+        <Dialog open={branchDialogOpen} onOpenChange={setBranchDialogOpen}>
+          <DialogContent className="sm:max-w-md" showCloseButton={false}>
+            <DialogHeader>
+              <DialogTitle>Create Branch</DialogTitle>
+              <DialogDescription>Create new branch</DialogDescription>
+            </DialogHeader>
+            <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2.5">
+              <span className="text-right text-sm text-muted-foreground">Create branch at:</span>
+              <div className="flex min-w-0 items-center gap-1.5 text-sm">
+                <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate">{activeRepository.currentBranch || 'main'}</span>
+              </div>
+              <span className="text-right text-sm text-muted-foreground">Branch name:</span>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
+                <Input
+                  autoFocus
+                  value={branchName}
+                  onChange={(event) => setBranchName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') createBranch(checkoutAfterCreate)
+                  }}
+                  placeholder="新分支名称"
+                />
+              </div>
+              <label className="col-start-2 flex cursor-pointer items-center gap-2 text-sm">
+                <Checkbox
+                  checked={checkoutAfterCreate}
+                  onCheckedChange={(checked) => setCheckoutAfterCreate(checked === true)}
+                />
+                Check out after create
+              </label>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setBranchDialogOpen(false)} disabled={busy}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => createBranch(checkoutAfterCreate)}
+                disabled={busy || !branchName.trim()}
+              >
+                {checkoutAfterCreate ? 'Create and Checkout' : 'Create'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         <Dialog open={pullOpen} onOpenChange={setPullOpen}>
           <DialogContent className="sm:max-w-md" showCloseButton={false}>
             <DialogHeader>
@@ -2189,59 +2346,98 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
   )
 }
 
-function BranchGroup({
+// SidebarSection 是侧边栏树的一级节点：折叠头 + 计数徽标。
+function SidebarSection({
   title,
   icon,
-  branches,
-  busy,
-  aheadCommits,
-  onSelect,
+  count,
+  children,
 }: {
   title: string
   icon: ReactNode
-  branches: Branch[]
-  busy: boolean
-  aheadCommits: number
-  onSelect: (branch: Branch) => void
+  count: number
+  children: ReactNode
 }) {
-  const [selected, setSelected] = useState<string | null>(null)
+  const [open, setOpen] = useState(true)
 
   return (
     <div>
-      <div className="mb-1 flex items-center gap-1.5 px-2 text-xs font-medium uppercase text-muted-foreground">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={title}
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
+      >
+        {open ? (
+          <ChevronDown className="size-3 shrink-0" />
+        ) : (
+          <ChevronRight className="size-3 shrink-0" />
+        )}
         {icon}
-        {title}
-      </div>
-      <div className="space-y-0.5">
-        {branches.length === 0 && <div className="px-2 py-1 text-xs text-muted-foreground">无</div>}
-        {branches.map((branch) => (
-          <button
-            key={branch.ref}
-            type="button"
-            disabled={busy || branch.current}
-            onClick={() => setSelected(branch.ref)}
-            onDoubleClick={() => onSelect(branch)}
-            className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors ${
-              branch.current
-                ? 'bg-primary/10 font-medium text-primary'
-                : selected === branch.ref
-                  ? 'bg-accent font-medium text-accent-foreground'
-                  : 'text-foreground hover:bg-muted'
-            }`}
-            title={branch.upstream ? `上游: ${branch.upstream}` : branch.ref}
-          >
-            <GitBranch className="size-3.5 shrink-0" />
-            <span className="min-w-0 flex-1 truncate">{branch.name}</span>
-            {branch.current && branch.upstream && (
-              <Badge variant="secondary" className="h-4 min-w-4 rounded-full px-1 text-[10px]">
-                {aheadCommits}
-              </Badge>
-            )}
-            {branch.current && <Check className="size-3.5 shrink-0" />}
-          </button>
-        ))}
-      </div>
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+        <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
+          {count}
+        </Badge>
+      </button>
+      {open && (
+        <div className="mt-0.5 space-y-0.5">
+          {count === 0 ? (
+            <div className="px-2 py-0.5 text-[11px] text-muted-foreground">无</div>
+          ) : (
+            children
+          )}
+        </div>
+      )}
     </div>
+  )
+}
+
+// SidebarRow 是树的叶子行：单击选中，配合 onDoubleClick 执行切换分支。
+// indent 默认跳过分组标题的下拉箭头（8 + 12 + 6）后再右移 8，避免与箭头对齐。
+function SidebarRow({
+  icon,
+  label,
+  detail,
+  badge,
+  current,
+  selected,
+  disabled,
+  indent = 34,
+  onClick,
+  onDoubleClick,
+}: {
+  icon: ReactNode
+  label: string
+  detail?: string
+  badge?: ReactNode
+  current?: boolean
+  selected?: boolean
+  disabled?: boolean
+  indent?: number
+  onClick?: () => void
+  onDoubleClick?: () => void
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
+      title={detail}
+      style={{ paddingLeft: indent }}
+      className={`flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left text-xs transition-colors ${
+        current
+          ? 'bg-primary/10 font-medium text-primary'
+          : selected
+            ? 'bg-accent font-medium text-accent-foreground'
+            : 'text-foreground hover:bg-muted'
+      }`}
+    >
+      {icon}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {badge}
+    </button>
   )
 }
 
@@ -2276,18 +2472,24 @@ function countRemoteBranches(node: RemoteBranchNode): number {
   return node.children.reduce((sum, child) => sum + countRemoteBranches(child), 0)
 }
 
-function RemoteBranchTree({
-  title,
-  icon,
+// remoteTreeIndent 每层缩进 16px，首层图标从 34 起，与分组标题下的叶子行对齐；
+// 目录行让出展开箭头与间距的宽度（12 + 4），使同层目录图标与分支图标对齐。
+const remoteTreeIndent = (depth: number, isFolder: boolean) =>
+  34 + depth * 16 - (isFolder ? 16 : 0)
+
+// RemoteBranchNodes 渲染 Remotes 节点下的远程分支树，目录可折叠。
+function RemoteBranchNodes({
   branches,
   busy,
-  onSelect,
+  selected,
+  onSelectItem,
+  onOpen,
 }: {
-  title: string
-  icon: ReactNode
   branches: Branch[]
   busy: boolean
-  onSelect: (branch: Branch) => void
+  selected: string
+  onSelectItem: (ref: string) => void
+  onOpen: (branch: Branch) => void
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
   const tree = useMemo(() => buildRemoteBranchTree(branches), [branches])
@@ -2302,21 +2504,20 @@ function RemoteBranchTree({
 
   const renderNodes = (nodes: RemoteBranchNode[], depth: number): ReactNode[] =>
     nodes.map((node) => {
-      const indent = { paddingLeft: depth * 12 + 8 }
       if (node.branch) {
+        const branch = node.branch
         return (
-          <button
-            key={node.branch.ref}
-            type="button"
+          <SidebarRow
+            key={branch.ref}
+            icon={<GitBranch className="size-3 shrink-0" />}
+            label={node.name}
+            detail={branch.upstream ? `上游: ${branch.upstream}` : branch.ref}
+            selected={selected === branch.ref}
             disabled={busy}
-            onClick={() => onSelect(node.branch!)}
-            className="flex w-full items-center gap-2 rounded-md py-1.5 pr-2 text-left text-sm text-foreground transition-colors hover:bg-muted"
-            style={indent}
-            title={node.branch.upstream ? `上游: ${node.branch.upstream}` : node.branch.ref}
-          >
-            <GitBranch className="size-3.5 shrink-0" />
-            <span className="min-w-0 flex-1 truncate">{node.name}</span>
-          </button>
+            indent={remoteTreeIndent(depth, false)}
+            onClick={() => onSelectItem(branch.ref)}
+            onDoubleClick={() => onOpen(branch)}
+          />
         )
       }
 
@@ -2327,17 +2528,17 @@ function RemoteBranchTree({
           <button
             type="button"
             onClick={() => toggle(node.path)}
-            className="flex w-full items-center gap-1 rounded-md py-1.5 pr-2 text-left text-sm text-foreground transition-colors hover:bg-muted"
-            style={indent}
+            style={{ paddingLeft: remoteTreeIndent(depth, true) }}
+            className="flex w-full items-center gap-1 rounded-md py-1 pr-2 text-left text-xs text-foreground transition-colors hover:bg-muted"
           >
             {isCollapsed ? (
-              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+              <ChevronRight className="size-3 shrink-0 text-muted-foreground" />
             ) : (
-              <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+              <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
             )}
-            <NodeIcon className="size-3.5 shrink-0 text-muted-foreground" />
+            <NodeIcon className="size-3 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate font-medium">{node.name}</span>
-            <Badge variant="outline" className="h-4 min-w-4 justify-center rounded-full px-1 text-[10px]">
+            <Badge variant="outline" className="h-3.5 min-w-3.5 justify-center rounded-full px-1 text-[9px]">
               {countRemoteBranches(node)}
             </Badge>
           </button>
@@ -2346,19 +2547,7 @@ function RemoteBranchTree({
       )
     })
 
-  return (
-    <div>
-      <div className="mb-1 flex items-center gap-1.5 px-2 text-xs font-medium uppercase text-muted-foreground">
-        {icon}
-        {title}
-      </div>
-      {branches.length === 0 ? (
-        <div className="px-2 py-1 text-xs text-muted-foreground">无</div>
-      ) : (
-        <div className="space-y-0.5">{renderNodes(tree, 0)}</div>
-      )}
-    </div>
-  )
+  return <>{renderNodes(tree, 0)}</>
 }
 
 type CommitFileListItem =

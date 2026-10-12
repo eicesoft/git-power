@@ -297,6 +297,38 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class Stash {
+	    ref: string;
+	    hash: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Stash(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ref = source["ref"];
+	        this.hash = source["hash"];
+	        this.message = source["message"];
+	    }
+	}
+	export class Tag {
+	    name: string;
+	    ref: string;
+	    hash: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Tag(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.ref = source["ref"];
+	        this.hash = source["hash"];
+	    }
+	}
 	export class Repository {
 	    path: string;
 	    name: string;
@@ -305,6 +337,8 @@ export namespace main {
 	    detached: boolean;
 	    remotes: string[];
 	    branches: Branch[];
+	    tags: Tag[];
+	    stashes: Stash[];
 	    commits: Commit[];
 	    changes: Change[];
 	
@@ -321,6 +355,8 @@ export namespace main {
 	        this.detached = source["detached"];
 	        this.remotes = source["remotes"];
 	        this.branches = this.convertValues(source["branches"], Branch);
+	        this.tags = this.convertValues(source["tags"], Tag);
+	        this.stashes = this.convertValues(source["stashes"], Stash);
 	        this.commits = this.convertValues(source["commits"], Commit);
 	        this.changes = this.convertValues(source["changes"], Change);
 	    }
@@ -371,6 +407,7 @@ export namespace main {
 	        this.agentModel = source["agentModel"];
 	    }
 	}
+	
 	export class SyncResult {
 	    found: number;
 	    added: number;

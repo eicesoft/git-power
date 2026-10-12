@@ -8,7 +8,7 @@ export function ClearGitCommandLogs():Promise<Array<main.GitCommandLog>>;
 
 export function Commit(arg1:string,arg2:string):Promise<main.Repository>;
 
-export function CreateBranch(arg1:string,arg2:string):Promise<main.Repository>;
+export function CreateBranch(arg1:string,arg2:string,arg3:boolean):Promise<main.Repository>;
 
 export function DeleteDashboardFolder(arg1:number):Promise<void>;
 

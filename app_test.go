@@ -101,12 +101,114 @@ func TestRepositoryWorkflow(t *testing.T) {
 		t.Fatalf("unexpected commit history: %+v", repo.Commits)
 	}
 
-	repo, err = app.CreateBranch(repo.Path, "feature")
+	repo, err = app.CreateBranch(repo.Path, "feature", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if repo.CurrentBranch != "feature" {
 		t.Fatalf("expected feature branch, got %q", repo.CurrentBranch)
+	}
+}
+
+// 侧边栏树需要展示 Tags 与 Stashes；annotated 标签必须解析为指向的提交哈希。
+func TestLoadRepositoryTagsAndStashes(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init", "-q", "-b", "main")
+	git(t, root, "config", "user.name", "Test User")
+	git(t, root, "config", "user.email", "test@example.com")
+	write(t, root, "first.txt", "one\n")
+	git(t, root, "add", "first.txt")
+	git(t, root, "commit", "-qm", "初始提交")
+
+	head := strings.TrimSpace(git(t, root, "rev-parse", "--short", "HEAD"))
+	git(t, root, "tag", "v1.0")
+	git(t, root, "tag", "-a", "v2.0", "-m", "第二个版本")
+
+	write(t, root, "first.txt", "two\n")
+	git(t, root, "stash", "push", "-qm", "临时改动")
+
+	repo, err := LoadRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.Tags) != 2 {
+		t.Fatalf("expected 2 tags, got %+v", repo.Tags)
+	}
+	for _, tag := range repo.Tags {
+		if tag.Hash != head {
+			t.Errorf("tag %s expected hash %s, got %s", tag.Name, head, tag.Hash)
+		}
+	}
+	if len(repo.Stashes) != 1 {
+		t.Fatalf("expected 1 stash, got %+v", repo.Stashes)
+	}
+	// git 会把 stash 消息包装成 "On <分支>: <说明>"，与 git stash list 输出一致。
+	if repo.Stashes[0].Ref != "stash@{0}" || !strings.Contains(repo.Stashes[0].Message, "临时改动") {
+		t.Fatalf("unexpected stash: %+v", repo.Stashes[0])
+	}
+}
+
+// refs/remotes/origin/HEAD 的 short name 是 "origin"，按 short name 过滤不到，
+// 侧边栏 Remotes 树会多出一个与真实远程目录并列的假节点。
+func TestLoadBranchesSkipsRemoteHead(t *testing.T) {
+	remote := t.TempDir()
+	git(t, remote, "init", "-q", "-b", "main")
+	git(t, remote, "config", "user.name", "Test User")
+	git(t, remote, "config", "user.email", "test@example.com")
+	write(t, remote, "first.txt", "one\n")
+	git(t, remote, "add", "first.txt")
+	git(t, remote, "commit", "-qm", "初始提交")
+
+	root := t.TempDir()
+	git(t, root, "init", "-q", "-b", "main")
+	git(t, root, "config", "user.name", "Test User")
+	git(t, root, "config", "user.email", "test@example.com")
+	write(t, root, "first.txt", "one\n")
+	git(t, root, "add", "first.txt")
+	git(t, root, "commit", "-qm", "初始提交")
+	git(t, root, "remote", "add", "origin", remote)
+	git(t, root, "fetch", "-q", "origin")
+	git(t, root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+	branches, err := loadBranches(root, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, branch := range branches {
+		if branch.Name == "origin" {
+			t.Fatalf("remote HEAD should be skipped, got %+v", branches)
+		}
+	}
+	if len(branches) != 2 {
+		t.Fatalf("expected main + origin/main, got %+v", branches)
+	}
+}
+
+func TestCreateBranchWithoutCheckout(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init", "-q", "-b", "main")
+	git(t, root, "config", "user.name", "Test User")
+	git(t, root, "config", "user.email", "test@example.com")
+	write(t, root, "first.txt", "one\n")
+	git(t, root, "add", "first.txt")
+	git(t, root, "commit", "-qm", "初始提交")
+
+	app := &App{}
+	repo, err := app.CreateBranch(root, "feature", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repo.CurrentBranch != "main" {
+		t.Fatalf("expected to stay on main, got %q", repo.CurrentBranch)
+	}
+	found := false
+	for _, branch := range repo.Branches {
+		if branch.Name == "feature" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected feature branch to exist, got %+v", repo.Branches)
 	}
 }
 

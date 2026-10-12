@@ -57,8 +57,22 @@ type Repository struct {
 	Detached      bool     `json:"detached"`
 	Remotes       []string `json:"remotes"`
 	Branches      []Branch `json:"branches"`
+	Tags          []Tag    `json:"tags"`
+	Stashes       []Stash  `json:"stashes"`
 	Commits       []Commit `json:"commits"`
 	Changes       []Change `json:"changes"`
+}
+
+type Tag struct {
+	Name string `json:"name"`
+	Ref  string `json:"ref"`
+	Hash string `json:"hash"`
+}
+
+type Stash struct {
+	Ref     string `json:"ref"`
+	Hash    string `json:"hash"`
+	Message string `json:"message"`
 }
 
 type Branch struct {
@@ -477,6 +491,8 @@ func LoadRepository(path string) (Repository, error) {
 		Name:     filepath.Base(root),
 		Remotes:  []string{},
 		Branches: []Branch{},
+		Tags:     []Tag{},
+		Stashes:  []Stash{},
 		Commits:  []Commit{},
 		Changes:  []Change{},
 	}
@@ -493,6 +509,14 @@ func LoadRepository(path string) (Repository, error) {
 		return Repository{}, err
 	}
 	repo.Branches, err = loadBranches(root, repo.CurrentBranch)
+	if err != nil {
+		return Repository{}, err
+	}
+	repo.Tags, err = loadTags(root)
+	if err != nil {
+		return Repository{}, err
+	}
+	repo.Stashes, err = loadStashes(root)
 	if err != nil {
 		return Repository{}, err
 	}
@@ -533,13 +557,17 @@ func (a *App) SwitchBranch(path, branch string, remote bool) (Repository, error)
 	return LoadRepository(path)
 }
 
-// CreateBranch 新建并切换到指定分支。
-func (a *App) CreateBranch(path, branch string) (Repository, error) {
+// CreateBranch 新建分支，checkout 为 true 时同时切换过去。
+func (a *App) CreateBranch(path, branch string, checkout bool) (Repository, error) {
 	branch = strings.TrimSpace(branch)
 	if branch == "" {
 		return Repository{}, fmt.Errorf("分支名不能为空")
 	}
-	if _, err := runGit(path, "switch", "-c", branch); err != nil {
+	if checkout {
+		if _, err := runGit(path, "switch", "-c", branch); err != nil {
+			return Repository{}, fmt.Errorf("新建分支失败: %w", err)
+		}
+	} else if _, err := runGit(path, "branch", branch); err != nil {
 		return Repository{}, fmt.Errorf("新建分支失败: %w", err)
 	}
 	return LoadRepository(path)
@@ -884,7 +912,8 @@ func loadBranches(path, current string) ([]Branch, error) {
 			continue
 		}
 		remote := strings.HasPrefix(fields[1], "refs/remotes/")
-		if remote && strings.HasSuffix(fields[0], "/HEAD") {
+		// refs/remotes/origin/HEAD 的 short name 是 "origin"，只能按完整 refname 判断。
+		if remote && strings.HasSuffix(fields[1], "/HEAD") {
 			continue
 		}
 		branches = append(branches, Branch{
@@ -900,6 +929,63 @@ func loadBranches(path, current string) ([]Branch, error) {
 		branches = []Branch{}
 	}
 	return branches, nil
+}
+
+// loadTags 读取标签，annotated 标签取其指向的提交哈希。
+func loadTags(path string) ([]Tag, error) {
+	output, err := runGit(
+		path,
+		"for-each-ref",
+		"--format=%(refname:short)%09%(refname)%09%(objectname:short)%09%(*objectname:short)",
+		"refs/tags",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("读取标签失败: %w", err)
+	}
+
+	var tags []Tag
+	for _, line := range strings.Split(strings.Trim(output, "\r\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) != 4 {
+			continue
+		}
+		hash := fields[3]
+		if hash == "" {
+			hash = fields[2]
+		}
+		tags = append(tags, Tag{Name: fields[0], Ref: fields[1], Hash: hash})
+	}
+	if tags == nil {
+		tags = []Tag{}
+	}
+	return tags, nil
+}
+
+// loadStashes 读取 stash 列表，按创建顺序倒序排列。
+func loadStashes(path string) ([]Stash, error) {
+	output, err := runGit(path, "stash", "list", "--format=%gd%x09%h%x09%gs")
+	if err != nil {
+		return nil, fmt.Errorf("读取 stash 失败: %w", err)
+	}
+
+	var stashes []Stash
+	for _, line := range strings.Split(strings.Trim(output, "\r\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) != 3 {
+			continue
+		}
+		stashes = append(stashes, Stash{Ref: fields[0], Hash: fields[1], Message: fields[2]})
+	}
+	if stashes == nil {
+		stashes = []Stash{}
+	}
+	return stashes, nil
 }
 
 // loadAheadCommits 返回当前分支相对 upstream 尚未推送的提交数。

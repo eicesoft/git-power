@@ -29,7 +29,6 @@ import {
   FolderGit2,
   FolderX,
   GitBranch,
-  GitCommitHorizontal,
   Home,
   History,
   Monitor,
@@ -1029,7 +1028,7 @@ function App() {
 
           <main className="flex min-w-0 flex-1 flex-col bg-muted/30">
           {activeRepository && (
-            <div className="flex h-[56px] shrink-0 items-center border-b px-2 py-1" style={noDragStyle}>
+            <div className="flex h-[64px] shrink-0 items-center border-b px-2 py-1" style={noDragStyle}>
             <div className="flex min-w-0 flex-1 items-center justify-center gap-10">
             <div className="flex items-center rounded-md">
               {toolbarActions.map((item, index) => (
@@ -1043,7 +1042,7 @@ function App() {
                   )}
                   <Button
                     variant="ghost"
-                    className={`h-11 ${
+                    className={`h-12 ${
                       (item.action === 'push' && currentBranchHasUpstream) ||
                       (item.action === 'pull' && currentBranchHasUpstream && behindCommits > 0)
                         ? 'w-16'
@@ -1064,8 +1063,8 @@ function App() {
                           : item.label
                     }
                   >
-                    <span className="relative flex h-7 w-7 items-center justify-center rounded-md p-1 group-hover/button:bg-muted">
-                      <item.icon className="size-5" />
+                    <span className="relative flex h-8 w-8 items-center justify-center rounded-md p-1 group-hover/button:bg-muted">
+                      <item.icon className="size-6" />
                       {item.action === 'push' && currentBranchHasUpstream && (
                         <Badge className="absolute -right-2.5 top-1 h-3.5 min-w-3.5 rounded-full px-1 text-[9px] leading-3">
                           {aheadCommits}
@@ -1086,7 +1085,7 @@ function App() {
             </div>
 
             <div
-              className="mx-2 grid h-9 min-w-64 max-w-xs flex-1 grid-cols-3 items-center gap-1 rounded-md border bg-[#F5F5F5] px-2 dark:bg-[#262626]"
+              className="relative mx-2 flex h-12 min-w-64 max-w-xs flex-1 items-center gap-1 rounded-md bg-[#F5F5F5] px-2 dark:bg-[#262626]"
               title={activeRepository.path}
             >
               <Popover.Root
@@ -1102,14 +1101,16 @@ function App() {
                       {...props}
                       variant="ghost"
                       size="icon"
-                      className={`size-6 justify-self-start ${gitLogOpen ? 'text-primary' : ''}`}
+                      className={`absolute left-1 top-1/2 -translate-y-1/2 hover:bg-transparent hover:text-muted-foreground dark:hover:bg-transparent dark:hover:text-muted-foreground ${gitLogOpen ? 'text-primary' : ''}`}
                       title="Git 命令行日志"
                       onClick={(event) => {
                         setGitLogAnchor({ x: event.clientX, y: event.clientY })
                         props.onClick?.(event as ReactMouseEvent<HTMLButtonElement>)
                       }}
                     >
-                      <GitCommitHorizontal className="size-4" />
+                      <span className="flex h-8 w-8 items-center justify-center rounded-md">
+                        <Terminal className="size-4" />
+                      </span>
                     </Button>
                   )}
                 />
@@ -1130,7 +1131,7 @@ function App() {
                     sideOffset={16}
                     collisionPadding={8}
                   >
-                    <Popover.Popup className="relative w-[min(760px,calc(100vw-2rem))] animate-in fade-in-0 slide-in-from-bottom-2 rounded-xl border bg-popover p-0 shadow-xl outline-none">
+                    <Popover.Popup className="relative w-[min(760px,calc(100vw-2rem))] animate-in fade-in-0 slide-in-from-bottom-2 select-none rounded-xl border bg-popover p-0 shadow-xl outline-none">
                       <div aria-hidden className="absolute -top-[5px] left-1/2 z-0 size-3 -translate-x-1/2 rotate-45 rounded-[2px] border-t border-l border-border bg-popover" />
                       <div className="flex h-10 items-center justify-between border-b px-3">
                         <div className="flex items-center gap-2 text-sm font-medium">
@@ -1185,7 +1186,7 @@ function App() {
                                       render={(props) => (
                                         <code
                                           {...props}
-                                          className="min-w-0 flex-1 cursor-pointer truncate font-mono text-xs"
+                                          className="min-w-0 flex-1 cursor-pointer truncate font-mono text-[11px]"
                                           onClick={() =>
                                             setExpandedLogIds((prev) => {
                                               const next = new Set(prev)
@@ -1208,12 +1209,12 @@ function App() {
                                   </span>
                                 </div>
                                 {log.output && expandedLogIds.has(log.id) && (
-                                  <pre className="scroll-on-hover max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 font-mono text-[11px] text-muted-foreground">
+                                  <pre className="scroll-on-hover max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 font-mono text-[10px] text-muted-foreground">
                                     {log.output}
                                   </pre>
                                 )}
                                 {log.error && expandedLogIds.has(log.id) && (
-                                  <pre className="scroll-on-hover max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-destructive/10 p-2 font-mono text-[11px] text-destructive">
+                                  <pre className="scroll-on-hover max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-destructive/10 p-2 font-mono text-[10px] text-destructive">
                                     {log.error}
                                   </pre>
                                 )}
@@ -1226,8 +1227,9 @@ function App() {
                   </Popover.Positioner>
                 </Popover.Portal>
               </Popover.Root>
+              <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 px-8">
               <span
-                className="truncate text-center text-sm font-medium"
+                className="w-full truncate text-center text-xs"
                 title={activeRepository.name}
               >
                 {activeRepository.name}
@@ -1238,13 +1240,14 @@ function App() {
                     <Button
                       {...props}
                       variant="ghost"
-                      className="h-7 min-w-0 max-w-48 shrink justify-center gap-1 justify-self-end px-2 text-sm"
+                      className="h-6 min-w-0 max-w-48 shrink justify-center gap-1 px-2 text-xs font-normal hover:bg-transparent dark:hover:bg-transparent"
                       title="选择分支"
                     >
-                      <span className="min-w-0 truncate text-muted-foreground">
-                        {activeRepository.currentBranch || 'main'}
+                      <span className="flex h-6 items-center gap-1 rounded-md px-1.5 text-muted-foreground group-hover/button:text-foreground">
+                        <GitBranch className="size-3 shrink-0" />
+                        <span className="min-w-0 truncate">{activeRepository.currentBranch || 'main'}</span>
+                        <ChevronDown className="size-3 shrink-0" />
                       </span>
-                      <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
                     </Button>
                   )}
                 />
@@ -1305,11 +1308,12 @@ function App() {
                   </Menu.Positioner>
                 </Menu.Portal>
               </Menu.Root>
+              </div>
             </div>
 
             <Button
               variant="ghost"
-              className="h-11 w-10 flex-col gap-0.5 rounded-md px-1 text-[10px] text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent"
+              className="h-12 w-10 flex-col gap-0.5 rounded-md px-1 text-[10px] text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent"
               onClick={() => {
                 setBranchName('')
                 setCreatingBranch(false)
@@ -1319,8 +1323,8 @@ function App() {
               disabled={busy}
               title="Branch"
             >
-              <span className="relative flex h-7 w-7 items-center justify-center rounded-md p-1 group-hover/button:bg-muted">
-                <GitBranch className="size-5" />
+              <span className="relative flex h-8 w-8 items-center justify-center rounded-md p-1 group-hover/button:bg-muted">
+                <GitBranch className="size-6" />
               </span>
               <span>Branch</span>
             </Button>
@@ -1334,11 +1338,11 @@ function App() {
                     <Button
                       {...props}
                       variant="ghost"
-                      className="h-11 min-w-10 flex-col gap-0.5 rounded-md px-1 text-[10px] text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent"
+                      className="h-12 min-w-10 flex-col gap-0.5 rounded-md px-1 text-[10px] text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent"
                       title="Open In"
                     >
-                      <span className="relative flex h-7 w-7 items-center justify-center rounded-md p-1 group-hover/button:bg-muted">
-                        <Monitor className="size-5" />
+                      <span className="relative flex h-8 w-8 items-center justify-center rounded-md p-1 group-hover/button:bg-muted">
+                        <Monitor className="size-6" />
                       </span>
                       <span>Open In</span>
                     </Button>

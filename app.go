@@ -41,6 +41,7 @@ func (a *App) startup(ctx context.Context) {
 	a.settings = settings
 	git.SetCommandPath(settings.GitPath)
 	git.SetLogSink(a.appendGitLog)
+	centerTrafficLights()
 }
 
 // GetSettings 返回当前应用设置。

@@ -5,60 +5,70 @@ package main
 #cgo LDFLAGS: -framework Cocoa
 #import <Cocoa/Cocoa.h>
 
-// centerTrafficLights 将红绿灯在 headerHeight 高的标题栏中垂直居中。
-// 用 Auto Layout 约束把按钮中心钉在内容视图顶边向下 headerHeight/2 处，
-// 窗口缩放或全屏后仍保持居中。
-static void centerTrafficLights(void *windowPtr, double headerHeight) {
-	NSWindow *window = (__bridge NSWindow *)windowPtr;
-	if (!window) {
+// logTrafficLight 把按钮位置追加到诊断文件，便于验证实际布局。
+static void logTrafficLight(NSString *message) {
+	NSString *path = @"/tmp/git-power-traffic.log";
+	NSString *line = [NSString stringWithFormat:@"%@ %@\n", [NSDate date], message];
+	NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+	if (!handle) {
+		[line writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
 		return;
 	}
+	[handle seekToEndOfFile];
+	[handle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+	[handle closeFile];
+}
+
+// findMainWindow 在应用窗口中查找标题匹配的主窗口。
+static NSWindow *findMainWindow(void) {
+	for (NSWindow *window in [NSApplication sharedApplication].windows) {
+		if ([window.title isEqualToString:@"Git Power"]) {
+			return window;
+		}
+	}
+	return nil;
+}
+
+// centerTrafficLights 用 Auto Layout 把红绿灯中心钉在按钮容器顶边向下
+// headerHeight/2 处（即标题栏中线），窗口缩放、全屏后自动保持居中。
+static void centerTrafficLights(double headerHeight) {
 	dispatch_async(dispatch_get_main_queue(), ^{
-		NSView *contentView = [window contentView];
+		NSWindow *window = findMainWindow();
+		if (!window) {
+			logTrafficLight(@"window not found");
+			return;
+		}
 		NSButton *closeBtn = [window standardWindowButton:NSWindowCloseButton];
 		NSButton *miniBtn = [window standardWindowButton:NSWindowMiniaturizeButton];
 		NSButton *zoomBtn = [window standardWindowButton:NSWindowZoomButton];
-		if (!contentView || !closeBtn || !miniBtn || !zoomBtn) {
+		NSView *container = closeBtn.superview;
+		if (!closeBtn || !miniBtn || !zoomBtn || !container) {
+			logTrafficLight(@"buttons or container missing");
 			return;
 		}
-		CGFloat leading = closeBtn.frame.origin.x;
+		logTrafficLight([NSString stringWithFormat:@"window=%@ container=%@ bounds=%@ contentViewBounds=%@",
+			window, container, NSStringFromRect(container.bounds), NSStringFromRect(window.contentView.bounds)]);
+		NSMutableArray *constraints = [NSMutableArray array];
 		for (NSButton *btn in @[closeBtn, miniBtn, zoomBtn]) {
 			[btn setTranslatesAutoresizingMaskIntoConstraints:NO];
-		}
-		[NSLayoutConstraint activateConstraints:@[
-			[NSLayoutConstraint constraintWithItem:closeBtn
-				attribute:NSLayoutAttributeLeading
-				relatedBy:NSLayoutRelationEqual
-				toItem:contentView
-				attribute:NSLayoutAttributeLeading
-				multiplier:1
-				constant:leading],
-			[NSLayoutConstraint constraintWithItem:closeBtn
+			[constraints addObject:[NSLayoutConstraint constraintWithItem:btn
 				attribute:NSLayoutAttributeCenterY
 				relatedBy:NSLayoutRelationEqual
-				toItem:contentView
+				toItem:container
 				attribute:NSLayoutAttributeTop
 				multiplier:1
-				constant:headerHeight / 2.0],
-		]];
+				constant:headerHeight / 2.0]];
+		}
+		[NSLayoutConstraint activateConstraints:constraints];
 	});
 }
 */
 import "C"
 
-import (
-	"context"
-	"unsafe"
-)
-
 // titleBarHeight 是前端标题栏（h-11）的高度，单位 point。
 const titleBarHeight = 44
 
 // centerTrafficLights 让 macOS 红绿灯垂直居中对齐标题栏。
-func centerTrafficLights(ctx context.Context) {
-	window, ok := ctx.Value("windowpointer").(unsafe.Pointer)
-	if !ok || window == nil {
-		return
-	}
-	C.centerTrafficLights(window, C.double(titleBarHeight))
+func centerTrafficLights() {
+	C.centerTrafficLights(C.double(titleBarHeight))
 }

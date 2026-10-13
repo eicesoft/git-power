@@ -1092,7 +1092,7 @@ function App() {
                   {item.action === 'stash' && (
                     <Separator
                       orientation="vertical"
-                      className="mx-0.5 h-5"
+                      className="mx-2 h-5"
                       style={{ alignSelf: 'center' }}
                     />
                   )}

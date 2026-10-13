@@ -1,4 +1,37 @@
-export namespace main {
+export namespace config {
+	
+	export class Settings {
+	    scanDirectories: string[];
+	    diffFontFamily: string;
+	    diffFontSize: number;
+	    recentLimit: number;
+	    confirmDiscard: boolean;
+	    gitPath: string;
+	    agentBaseUrl: string;
+	    agentApiKey: string;
+	    agentModel: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Settings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.scanDirectories = source["scanDirectories"];
+	        this.diffFontFamily = source["diffFontFamily"];
+	        this.diffFontSize = source["diffFontSize"];
+	        this.recentLimit = source["recentLimit"];
+	        this.confirmDiscard = source["confirmDiscard"];
+	        this.gitPath = source["gitPath"];
+	        this.agentBaseUrl = source["agentBaseUrl"];
+	        this.agentApiKey = source["agentApiKey"];
+	        this.agentModel = source["agentModel"];
+	    }
+	}
+
+}
+
+export namespace git {
 	
 	export class Branch {
 	    name: string;
@@ -129,75 +162,6 @@ export namespace main {
 		}
 	}
 	
-	export class ProjectInfo {
-	    path: string;
-	    name: string;
-	    lastOpenedAt: string;
-	    folderId?: number;
-	    missing: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new ProjectInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.path = source["path"];
-	        this.name = source["name"];
-	        this.lastOpenedAt = source["lastOpenedAt"];
-	        this.folderId = source["folderId"];
-	        this.missing = source["missing"];
-	    }
-	}
-	export class Folder {
-	    id: number;
-	    name: string;
-	    parentId?: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new Folder(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.name = source["name"];
-	        this.parentId = source["parentId"];
-	    }
-	}
-	export class DashboardData {
-	    folders: Folder[];
-	    projects: ProjectInfo[];
-	
-	    static createFrom(source: any = {}) {
-	        return new DashboardData(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.folders = this.convertValues(source["folders"], Folder);
-	        this.projects = this.convertValues(source["projects"], ProjectInfo);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	
 	export class GitCommandLog {
 	    id: number;
 	    command: string;
@@ -236,21 +200,6 @@ export namespace main {
 	        this.value = source["value"];
 	    }
 	}
-	export class GitInfo {
-	    path: string;
-	    version: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new GitInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.path = source["path"];
-	        this.version = source["version"];
-	    }
-	}
-	
 	export class ProjectReadme {
 	    name: string;
 	    content: string;
@@ -399,34 +348,30 @@ export namespace main {
 		    return a;
 		}
 	}
-	export class Settings {
-	    scanDirectories: string[];
-	    diffFontFamily: string;
-	    diffFontSize: number;
-	    recentLimit: number;
-	    confirmDiscard: boolean;
-	    gitPath: string;
-	    agentBaseUrl: string;
-	    agentApiKey: string;
-	    agentModel: string;
+	
+
+}
+
+export namespace main {
+	
+	export class GitInfo {
+	    path: string;
+	    version: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new Settings(source);
+	        return new GitInfo(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.scanDirectories = source["scanDirectories"];
-	        this.diffFontFamily = source["diffFontFamily"];
-	        this.diffFontSize = source["diffFontSize"];
-	        this.recentLimit = source["recentLimit"];
-	        this.confirmDiscard = source["confirmDiscard"];
-	        this.gitPath = source["gitPath"];
-	        this.agentBaseUrl = source["agentBaseUrl"];
-	        this.agentApiKey = source["agentApiKey"];
-	        this.agentModel = source["agentModel"];
+	        this.path = source["path"];
+	        this.version = source["version"];
 	    }
 	}
+
+}
+
+export namespace scan {
 	
 	export class SyncResult {
 	    found: number;
@@ -444,6 +389,80 @@ export namespace main {
 	        this.updated = source["updated"];
 	    }
 	}
+
+}
+
+export namespace store {
+	
+	export class ProjectInfo {
+	    path: string;
+	    name: string;
+	    lastOpenedAt: string;
+	    folderId?: number;
+	    missing: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProjectInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.name = source["name"];
+	        this.lastOpenedAt = source["lastOpenedAt"];
+	        this.folderId = source["folderId"];
+	        this.missing = source["missing"];
+	    }
+	}
+	export class Folder {
+	    id: number;
+	    name: string;
+	    parentId?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Folder(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.parentId = source["parentId"];
+	    }
+	}
+	export class DashboardData {
+	    folders: Folder[];
+	    projects: ProjectInfo[];
+	
+	    static createFrom(source: any = {}) {
+	        return new DashboardData(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.folders = this.convertValues(source["folders"], Folder);
+	        this.projects = this.convertValues(source["projects"], ProjectInfo);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 
 }
 

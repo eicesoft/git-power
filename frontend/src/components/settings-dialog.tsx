@@ -34,9 +34,9 @@ import { toastError, toastSuccess } from '@/components/ui/toast'
 import { DiffViewer } from '@/components/diff-viewer'
 import { errorMessage } from '@/lib/utils'
 import { GetGitGlobalConfig, SelectScanDirectory, SetGitGlobalConfig } from '../../wailsjs/go/main/App'
-import type { main } from '../../wailsjs/go/models'
+import type { config, main } from '../../wailsjs/go/models'
 
-type Settings = main.Settings
+type Settings = config.Settings
 type GitInfo = main.GitInfo
 
 // Select 用空字符串表示未设置，这里用一个不会与真实配置值冲突的占位值承载。

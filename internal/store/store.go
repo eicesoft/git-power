@@ -1,4 +1,5 @@
-package main
+// Package store 使用 SQLite 持久化已登记的仓库与自定义目录。
+package store
 
 import (
 	"database/sql"
@@ -342,9 +343,4 @@ func scanProjects(rows *sql.Rows) ([]ProjectInfo, error) {
 
 func (s *ProjectStore) Close() error {
 	return s.db.Close()
-}
-
-// projectStorePath 返回应用数据目录下的 SQLite 数据库路径。
-func projectStorePath() string {
-	return filepath.Join(appConfigDir(), "projects.db")
 }

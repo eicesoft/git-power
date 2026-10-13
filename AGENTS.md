@@ -4,8 +4,9 @@ Git Power 是基于 Wails v2 的桌面 Git 客户端。Go 后端通过 Wails 生
 
 ## 项目结构与模块组织
 
-- 根目录 Go 文件：`main.go` 负责启动 Wails；`app.go` 定义 `App` API、Git 命令执行、数据解析和导出类型。
-- Go 测试：`app_test.go` 使用临时仓库编写单元测试和流程测试。
+- 根目录 Go 文件：`main.go` 负责启动 Wails；`app.go` 定义 `App` 绑定对象与设置、窗口、命令日志；`app_repository.go`、`app_dashboard.go`、`files.go` 是其余导出方法的薄转发层。
+- Go 内部包：`internal/git` 是 Git 领域层（类型、命令执行、解析、全部仓库操作）；`internal/store` 用 SQLite 持久化仓库与目录；`internal/config` 负责设置读写与数据目录路径；`internal/scan` 扫描目录同步仓库；`internal/testutil` 提供跨包共用的测试辅助函数。
+- Go 测试：`app_test.go` 及各包的 `*_test.go` 使用临时仓库编写单元测试和流程测试。
 - 前端源码：主要界面位于 `frontend/src/App.tsx`；可复用控件位于 `frontend/src/components/ui/`；主题定义位于 `frontend/src/index.css`。
 - 生成绑定：`frontend/wailsjs/go/` 包含由导出 Go 方法生成的 TypeScript 绑定，禁止手动编辑。
 - 项目配置：`wails.json` 配置应用和开发服务器；`Makefile` 定义桌面构建目标。

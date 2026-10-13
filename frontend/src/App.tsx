@@ -265,11 +265,11 @@ function App() {
     })
   }
 
-  const [diffPaneRatio, setDiffPaneRatio] = useState(0.55)
+  const [diffPaneRatio, setDiffPaneRatio] = useState(0.72)
 
   const startDiffPaneDrag = (event: ReactMouseEvent<HTMLDivElement>) => {
     startPaneDrag(event, (deltaY, containerHeight) => {
-      setDiffPaneRatio(Math.min(0.8, Math.max(0.2, diffPaneRatio + deltaY / containerHeight)))
+      setDiffPaneRatio(Math.min(0.72, Math.max(0.2, diffPaneRatio + deltaY / containerHeight)))
     }, 'y')
   }
 
@@ -1085,11 +1085,11 @@ function App() {
           <main className="flex min-w-0 flex-1 flex-col bg-muted/30">
           {activeRepository && (
             <div className="flex h-[64px] shrink-0 items-center border-b px-2 py-1" style={noDragStyle}>
-            <div className="flex min-w-0 flex-1 items-center justify-center gap-10">
+            <div className="flex min-w-0 flex-1 items-center justify-end gap-10">
             <div className="flex items-center rounded-md">
-              {toolbarActions.map((item, index) => (
+              {toolbarActions.map((item) => (
                 <Fragment key={item.action}>
-                  {index > 0 && (
+                  {item.action === 'stash' && (
                     <Separator
                       orientation="vertical"
                       className="mx-0.5 h-5"
@@ -1098,12 +1098,7 @@ function App() {
                   )}
                   <Button
                     variant="ghost"
-                    className={`h-12 ${
-                      (item.action === 'push' && currentBranchHasUpstream) ||
-                      (item.action === 'pull' && currentBranchHasUpstream && behindCommits > 0)
-                        ? 'w-16'
-                        : 'w-10'
-                    } flex-col gap-0.5 rounded-md px-1 text-[10px] text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent`}
+                    className="h-12 w-11 flex-col items-center gap-0.5 rounded-md px-1 text-[10px] text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent"
                     onClick={() =>
                       item.action === 'pull'
                         ? openPullDialog()
@@ -1122,12 +1117,12 @@ function App() {
                     <span className="relative flex h-8 w-8 items-center justify-center rounded-md p-1 group-hover/button:bg-muted">
                       <item.icon className="size-6" />
                       {item.action === 'push' && currentBranchHasUpstream && (
-                        <Badge className="absolute -right-2.5 top-1 h-3.5 min-w-3.5 rounded-full px-1 text-[9px] leading-3">
+                        <Badge className="absolute -right-1 top-0 h-3.5 min-w-3.5 rounded-full px-1 text-[9px] leading-3">
                           {aheadCommits}
                         </Badge>
                       )}
                       {item.action === 'pull' && currentBranchHasUpstream && behindCommits > 0 && (
-                        <Badge className="absolute -right-2.5 top-1 h-3.5 min-w-3.5 rounded-full px-1 text-[9px] leading-3">
+                        <Badge className="absolute -right-1 top-0 h-3.5 min-w-3.5 rounded-full px-1 text-[9px] leading-3">
                           {behindCommits}
                         </Badge>
                       )}
@@ -1139,9 +1134,10 @@ function App() {
                 </Fragment>
               ))}
             </div>
+            </div>
 
             <div
-              className="relative mx-2 flex h-12 min-w-64 max-w-xs flex-1 items-center gap-1 rounded-md bg-[#F5F5F5] px-2 dark:bg-[#262626]"
+              className="relative mx-10 flex h-12 w-72 shrink-0 items-center gap-1 rounded-md bg-[#F5F5F5] px-2 dark:bg-[#262626]"
               title={activeRepository.path}
             >
               {remoteBusy && (
@@ -1372,6 +1368,7 @@ function App() {
               </div>
             </div>
 
+            <div className="flex min-w-0 flex-1 items-center justify-between gap-10">
             <Button
               variant="ghost"
               className="h-12 w-10 flex-col gap-0.5 rounded-md px-1 text-[10px] text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent"
@@ -1389,8 +1386,6 @@ function App() {
               </span>
               <span>Branch</span>
             </Button>
-
-            </div>
 
             <div className="flex shrink-0 items-center gap-10">
               <Menu.Root>
@@ -1422,6 +1417,7 @@ function App() {
                   </Menu.Positioner>
                 </Menu.Portal>
               </Menu.Root>
+            </div>
             </div>
           </div>
         )}
@@ -1546,8 +1542,9 @@ function App() {
                       </div>
                       <span className="text-xs text-muted-foreground">{stagedChanges.length} 个暂存文件</span>
                     </div>
-                    <label className="block">
+                    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-input bg-background">
                       <Input
+                        className="rounded-none border-0 px-3 focus-visible:ring-0"
                         value={commitSubjects[activeRepository.path] ?? ''}
                         onChange={(event) =>
                           setCommitSubjects((drafts) => ({
@@ -1558,10 +1555,8 @@ function App() {
                         placeholder="Commit Subject"
                         disabled={busy}
                       />
-                    </label>
-                    <label className="flex min-h-0 flex-1 flex-col">
                       <textarea
-                        className="min-h-20 flex-1 resize-none rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="min-h-20 w-full flex-1 resize-none rounded-none border-0 border-t border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
                         value={commitDescriptions[activeRepository.path] ?? ''}
                         onChange={(event) =>
                           setCommitDescriptions((drafts) => ({
@@ -1572,7 +1567,7 @@ function App() {
                         placeholder="Description（可选）"
                         disabled={busy}
                       />
-                    </label>
+                    </div>
                     <div className="flex items-center justify-between gap-3">
                       <span className="truncate text-xs text-muted-foreground">
                         {stagedChanges.length === 0 ? '暂存文件后可提交' : '提交将包含暂存区内容'}
